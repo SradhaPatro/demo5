@@ -7,7 +7,7 @@
     "dev": "npx prisma generate --schema=backend/prisma/schema.prisma && tsx backend/server.ts",
     "dev:backend": "tsx backend/server.ts",
     "dev:frontend": "vite --config frontend/vite.config.ts",
-    "build": "npx prisma generate --schema=backend/prisma/schema.prisma && vite build --config frontend/vite.config.ts && esbuild backend/server.ts --bundle --platform=node --format=cjs --packages=external --sourcemap --outfile=dist/server.cjs",
+    "build": "npx prisma generate --schema=backend/prisma/schema.prisma && vite build --config frontend/vite.config.ts && esbuild backend/server.ts --bundle --platform=node --format=cjs --packages=external --sourcemap --outfile=dist/server.cjs && esbuild backend/server.ts --bundle --platform=node --format=cjs --define:process.env.VERCEL=\\\"true\\\" --outfile=api/_handler.cjs",
     "start": "node dist/server.cjs",
     "lint": "tsc --noEmit",
     "test": "vitest run",

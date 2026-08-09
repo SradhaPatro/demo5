@@ -7,5 +7,15 @@
       "source": "/((?!api/).*)",
       "destination": "/index.html"
     }
-  ]
+  ],
+  "functions": {
+    "api/[...path].js": {
+      "memory": 1024,
+      "maxDuration": 30
+    },
+    "api/index.js": {
+      "memory": 1024,
+      "maxDuration": 30
+    }
+  }
 }
