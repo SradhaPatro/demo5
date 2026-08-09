@@ -110,11 +110,17 @@ function normDir(dir?: string): "forward" | "return" {
   return "forward";
 }
 
+// Statuses that mean the host is already committed to a guest on this leg.
+const HOST_BUSY_STATUSES = new Set(["active", "matched", "pending_trip"]);
+
 // Is this host subscription already paired for the given direction?
 export function hostBusy(state: MatchableState, hostSubId: string, dir: string): boolean {
   const targetDir = normDir(dir);
   return state.matches.some(
-    (m) => m.hostSubscriptionId === hostSubId && normDir(m.direction) === targetDir && m.status === "active"
+    (m) =>
+      m.hostSubscriptionId === hostSubId &&
+      normDir(m.direction) === targetDir &&
+      HOST_BUSY_STATUSES.has(m.status)
   );
 }
 
@@ -136,12 +142,27 @@ export async function findBuddyForGuest(
   const isEligibleStatus = guestSub.status === "active" || guestSub.status === "matching" || guestSub.status === "geocoding" || guestSub.status === "pending";
   if (!isGuest || !isEligibleStatus || !guestSub.direction) return null;
 
+  // Bug 4: Reject placeholder addresses early — geocoding them produces garbage coordinates
+  // that will produce meaningless proximity scores.
+  if (isPlaceholderAddress(guestSub.origin) || isPlaceholderAddress(guestSub.destination)) {
+    logger.warn({ guestSubId: guestSub.id }, "[matching] guest has placeholder address — skipping match");
+    return null;
+  }
+
   const dir = guestSub.direction;
   const dirNorm = normDir(dir);
   const guestTime = timeToMinutes(guestSub.departureTime);
 
   const hostSubs = state.subscriptions.filter(
-    (s) => s.role === "host" && (s.status === "active" || s.status === "matching" || s.status === "geocoding" || s.status === "pending") && !hostBusy(state, s.id, dirNorm)
+    (s) =>
+      s.role === "host" &&
+      (s.status === "active" || s.status === "matching" || s.status === "geocoding" || s.status === "pending") &&
+      // Bug 1: Exclude the guest's own user from host candidates (no self-matching)
+      s.userId !== guestSub.userId &&
+      !hostBusy(state, s.id, dirNorm) &&
+      // Bug 4: Skip hosts with placeholder addresses too
+      !isPlaceholderAddress(s.origin) &&
+      !isPlaceholderAddress(s.destination)
   );
 
   // Evaluate proximity + time for each host candidate.
@@ -164,10 +185,14 @@ export async function findBuddyForGuest(
     const maxRadius = MAX_RADIUS_M;
     if (pickupM > maxRadius || dropM > maxRadius) continue;
 
-    // Time compatibility (skip if both times known and too far apart).
+    // Bug 5: Skip host if the relevant leg time is completely absent.
+    // A host with no returnTime cannot serve an evening/return journey.
     const hostTimeStr = isReturn ? hostSub.returnTime : hostSub.forwardTime;
+    if (!hostTimeStr) continue; // no leg time → cannot serve this direction
+
+    // Time compatibility (skip if times are too far apart).
     const hostTime = timeToMinutes(hostTimeStr);
-    let timeScore = 0.5; // unknown time → neutral
+    let timeScore = 0.5; // unknown time format → neutral
     if (guestTime != null && hostTime != null) {
       const diff = Math.abs(guestTime - hostTime);
       if (diff > TIME_WINDOW_MIN) continue;

@@ -183,18 +183,29 @@ export async function processActivation(sub: Subscription, deps: ActivationDeps)
     let matches: Match[] = [];
     if (subRole === 'guest') {
       const tryMatchStart = Date.now();
-      const m = await withTimeout(deps.tryMatchGuestSub(deps.db as any, sub), 30000, "tryMatchGuestSub").catch(() => null);
+      const m = await withTimeout(deps.tryMatchGuestSub(deps.db as any, sub), 30000, "tryMatchGuestSub")
+        .catch((err: any) => {
+          // Bug 3: If matching times out or throws, ensure subscription is not
+          // left permanently stranded in "matching" status. Reset to "active"
+          // so the next sweep can retry it.
+          deps.logger.warn({ err, subscriptionId: sub.id, userId }, "[activation] matching timed out or failed — resetting to active");
+          return null;
+        });
       timing.tryMatchGuestSubMs = Date.now() - tryMatchStart;
       if (m) {
         matches = [m];
         sub.matchId = m.id;
-        sub.status = "active" as const;
-      } else {
-        sub.status = "active" as const;
       }
+      // Always reset to "active" — whether matched or not.
+      // This is critical: status must never stay "matching" after this point.
+      sub.status = "active" as const;
     } else {
       const sweepStart = Date.now();
-      const sweep = await withTimeout(deps.runMatchSweep(deps.db as any), 30000, "runMatchSweep").catch(() => []);
+      const sweep = await withTimeout(deps.runMatchSweep(deps.db as any), 30000, "runMatchSweep")
+        .catch((err: any) => {
+          deps.logger.warn({ err, subscriptionId: sub.id, userId }, "[activation] sweep timed out — will retry on next sweep cycle");
+          return [] as Match[];
+        });
       timing.runMatchSweepMs = Date.now() - sweepStart;
       matches = sweep;
       sub.status = "active" as const;
@@ -219,7 +230,14 @@ export async function processActivation(sub: Subscription, deps: ActivationDeps)
   try {
     await deps.withLock(lockKey, runActivationTask, 120_000);
   } catch (err: any) {
-    sub.status = "failed" as const;
+    // Bug 3: Ensure the subscription is never left in "matching" or "geocoding"
+    // state after a lock failure. Always reset to "active" so the next sweep
+    // can attempt matching, or to "failed" only as a last resort.
+    if (sub.status === "matching" || sub.status === "geocoding") {
+      sub.status = "active" as const;
+    } else {
+      sub.status = "failed" as const;
+    }
     try { await deps.saveDB(deps.db); } catch {}
     deps.logger.error({ err, userId, subscriptionId: sub.id }, "[activation] background processing failed");
   }
