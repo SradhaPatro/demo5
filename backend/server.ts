@@ -137,6 +137,22 @@ app.use((err: any, _req: express.Request, res: express.Response, next: express.N
   }
   return next(err);
 });
+
+// Middleware to ensure DB state is loaded before handling any API endpoint (prevents serverless cold-start 500 errors)
+app.use("/api", async (_req, res, next) => {
+  if (!db) {
+    try {
+      await initDb();
+      db = (await loadState(seedState())) as DatabaseState;
+      if (!Array.isArray(db.notifications)) db.notifications = [];
+      configureNotifications(db.notifications, () => saveDB(db));
+    } catch (err) {
+      logger.error({ err }, "[server] DB initialization error");
+      return res.status(500).json({ error: "Failed to initialize database" });
+    }
+  }
+  next();
+});
 // ── Production boot guard ──
 if (process.env.NODE_ENV === "production") {
   if (process.env.ALLOW_DEV_OTP === "true") {
