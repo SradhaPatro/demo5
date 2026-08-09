@@ -111,6 +111,7 @@ function withTimeout<T>(p: Promise<T>, ms: number, label = "operation"): Promise
 // ── Start Express Application ──
 
 const app = express();
+export { app };
 app.set("trust proxy", 1);
 const PORT = Number(process.env.PORT) || 3000;
 
