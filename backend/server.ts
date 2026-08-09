@@ -2891,11 +2891,12 @@ app.get("/live", (_req, res) => {
   res.json({ status: "alive" });
 });
 
-// Start accepting TCP connections immediately.  API requests are blocked by the
-// 503 guard until all state is loaded.
-httpServer = app.listen(PORT, "0.0.0.0", () => {
-  logger.info({ port: PORT }, "[server] running");
-});
+// Start accepting TCP connections immediately when running as standalone Node server.
+if (!process.env.VERCEL) {
+  httpServer = app.listen(PORT, "0.0.0.0", () => {
+    logger.info({ port: PORT }, "[server] running");
+  });
+}
 
 // ── Background initialisation ───────────────────────────────────────────────
 (async () => {
@@ -2920,7 +2921,7 @@ httpServer = app.listen(PORT, "0.0.0.0", () => {
       app.all("/api/*", (_req, res) => {
         res.status(404).json({ error: "API route not found" });
       });
-      if (process.env.NODE_ENV !== "production") {
+      if (process.env.NODE_ENV !== "production" && !process.env.VERCEL) {
         const vite = await createViteServer({
           configFile: path.join(process.cwd(), "frontend", "vite.config.ts"),
           server: { middlewareMode: true },
