@@ -52,11 +52,17 @@ export default function AuthModal({ onClose, onSuccess, defaultRole = 'guest' }:
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ phoneOrEmail: contact })
         });
-        let data;
+        let data: any;
         try {
           data = await response.json();
-        } catch (e) {
-          setError('Invalid response from server.');
+        } catch {
+          setError(`Server error (${response.status}). Please try again.`);
+          return;
+        }
+
+        if (!response.ok || data.error) {
+          setError(data.error || `Request failed with status ${response.status}`);
+          setIsLoading(false);
           return;
         }
 
@@ -92,15 +98,15 @@ export default function AuthModal({ onClose, onSuccess, defaultRole = 'guest' }:
             role: defaultRole
           })
         });
-        let data;
+        let data: any;
         try {
           data = await response.json();
-        } catch (e) {
-          setError('Invalid response from server.');
+        } catch {
+          setError(`Server error (${response.status}). Please try again.`);
           return;
         }
-        if (data.error) {
-          setError(data.error);
+        if (!response.ok || data.error) {
+          setError(data.error || `Registration failed (${response.status})`);
           setIsLoading(false);
           return;
         }
