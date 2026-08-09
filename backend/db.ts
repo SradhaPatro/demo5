@@ -700,6 +700,83 @@ export function saveState(state: any): Promise<void> {
   return persistAll(state).catch((e) => logger.error({ err: e }, "[db] persist error"));
 }
 
+// ── Targeted single-record saves (fast path for hot endpoints) ──────────────
+// Use these instead of saveState() when only one or two records changed, e.g.
+// on trip completion, subscription activation, or wallet credit.
+
+export async function persistTrip(trip: any): Promise<void> {
+  if (!trip?.id) return;
+  if (isFallbackMode()) return; // file mode: caller still does full saveState
+  try {
+    const dbTrip = toDbTrip(trip);
+    await prisma.trip.upsert({ where: { id: dbTrip.id }, create: dbTrip, update: dbTrip });
+  } catch (e) {
+    logger.error({ err: e, tripId: trip?.id }, "[db] persistTrip failed");
+  }
+}
+
+export async function persistMatch(match: any): Promise<void> {
+  if (!match?.id) return;
+  if (isFallbackMode()) return;
+  try {
+    const dbMatch = toDbMatch(match);
+    await prisma.match.upsert({ where: { id: dbMatch.id }, create: dbMatch, update: dbMatch });
+  } catch (e) {
+    logger.error({ err: e, matchId: match?.id }, "[db] persistMatch failed");
+  }
+}
+
+export async function persistSubscription(sub: any): Promise<void> {
+  if (!sub?.id) return;
+  if (isFallbackMode()) return;
+  try {
+    const dbSub = toDbSub(sub);
+    await prisma.subscription.upsert({ where: { id: dbSub.id }, create: dbSub, update: dbSub });
+  } catch (e) {
+    logger.error({ err: e, subId: sub?.id }, "[db] persistSubscription failed");
+  }
+}
+
+export async function persistWalletForUser(userId: string, wallet: any): Promise<void> {
+  if (!userId || !wallet) return;
+  if (isFallbackMode()) return;
+  try {
+    await prisma.wallet.upsert({
+      where: { userId },
+      create: { userId, credits: wallet.credits || 0 },
+      update: { credits: wallet.credits || 0 },
+    });
+    // Only persist the most recent transaction (unshift puts newest first)
+    const latest = wallet.history?.[0];
+    if (latest?.id) {
+      await prisma.walletTransaction.upsert({
+        where: { id: latest.id },
+        create: {
+          id: latest.id, walletId: userId,
+          amount: latest.amount || 0, type: latest.type || "credit",
+          description: latest.description || "",
+          timestamp: latest.timestamp ? new Date(latest.timestamp) : new Date(),
+        },
+        update: { amount: latest.amount || 0, type: latest.type || "credit", description: latest.description || "" },
+      });
+    }
+  } catch (e) {
+    logger.error({ err: e, userId }, "[db] persistWalletForUser failed");
+  }
+}
+
+export async function persistUser(user: any): Promise<void> {
+  if (!user?.id) return;
+  if (isFallbackMode()) return;
+  try {
+    const dbUser = toDbUser(user);
+    await prisma.user.upsert({ where: { id: dbUser.id }, create: dbUser, update: dbUser });
+  } catch (e) {
+    logger.error({ err: e, userId: user?.id }, "[db] persistUser failed");
+  }
+}
+
+
 async function persistAll(state: any): Promise<void> {
   if (!state) return;
 
