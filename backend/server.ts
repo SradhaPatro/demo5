@@ -2430,7 +2430,279 @@ app.put("/api/admin/users/:id/action", async (req, res) => {
   res.json({ success: true, user: { ...user, status: db.userStatus[req.params.id] || "active" } });
 });
 
-// â”€â”€ RIDE MANAGEMENT â”€â”€
+// ── DOCUMENT VERIFICATION ENDPOINTS ─────────────────────────────────────────
+
+const MANDATORY_VERIFICATION_DOCS = [
+  'GOVERNMENT_ID',
+  'DRIVING_LICENSE',
+  'VEHICLE_RC',
+  'INSURANCE',
+  'PROFILE_PHOTO'
+];
+
+function calcHostOverallStatus(docs: any[]): 'none' | 'pending' | 'verified' | 'action_required' {
+  if (!docs || docs.length === 0) return 'none';
+  const docMap = new Map(docs.map(d => [d.documentType, d]));
+  const hasRejection = MANDATORY_VERIFICATION_DOCS.some(t => docMap.get(t)?.status === 'REJECTED');
+  if (hasRejection) return 'action_required';
+  const allApproved = MANDATORY_VERIFICATION_DOCS.every(t => docMap.get(t)?.status === 'APPROVED');
+  if (allApproved) return 'verified';
+  return 'pending';
+}
+
+app.get("/api/verification/my-documents", async (req, res) => {
+  const tokenUser = bearerFrom(req) ? verifyAccessToken(bearerFrom(req)!) : null;
+  const userId = tokenUser?.sub || (req.query.userId as string);
+  if (!userId) return res.status(401).json({ error: "Unauthorized" });
+
+  if (!Array.isArray(db.verificationDocuments)) db.verificationDocuments = [];
+  if (!Array.isArray(db.verificationHistories)) db.verificationHistories = [];
+
+  let docs: any[] = [];
+  try {
+    docs = await prisma.verificationDocument.findMany({
+      where: { userId },
+      include: { history: { orderBy: { createdAt: 'desc' } } }
+    });
+  } catch {
+    docs = db.verificationDocuments.filter((d: any) => d.userId === userId);
+  }
+
+  const overallStatus = calcHostOverallStatus(docs);
+
+  res.json({
+    documents: docs,
+    overallStatus,
+    mandatoryDocs: MANDATORY_VERIFICATION_DOCS
+  });
+});
+
+app.post("/api/verification/upload-document", async (req, res) => {
+  const tokenUser = bearerFrom(req) ? verifyAccessToken(bearerFrom(req)!) : null;
+  const userId = tokenUser?.sub || req.body.userId;
+  if (!userId) return res.status(401).json({ error: "Unauthorized" });
+
+  const { documentType, storagePath } = req.body;
+  if (!documentType || !storagePath) {
+    return res.status(400).json({ error: "documentType and storagePath are required" });
+  }
+
+  if (!MANDATORY_VERIFICATION_DOCS.includes(documentType)) {
+    return res.status(400).json({ error: `Invalid documentType. Must be one of: ${MANDATORY_VERIFICATION_DOCS.join(', ')}` });
+  }
+
+  if (!Array.isArray(db.verificationDocuments)) db.verificationDocuments = [];
+  if (!Array.isArray(db.verificationHistories)) db.verificationHistories = [];
+
+  let doc: any = null;
+  const submittedAt = new Date();
+
+  // Update in DB or mock store
+  const existingIdx = db.verificationDocuments.findIndex((d: any) => d.userId === userId && d.documentType === documentType);
+  if (existingIdx !== -1) {
+    db.verificationDocuments[existingIdx] = {
+      ...db.verificationDocuments[existingIdx],
+      storagePath,
+      status: 'PENDING',
+      rejectionReason: null,
+      submittedAt: submittedAt.toISOString(),
+      updatedAt: submittedAt.toISOString()
+    };
+    doc = db.verificationDocuments[existingIdx];
+  } else {
+    doc = {
+      id: genId('doc'),
+      userId,
+      documentType,
+      storagePath,
+      status: 'PENDING',
+      rejectionReason: null,
+      submittedAt: submittedAt.toISOString(),
+      createdAt: submittedAt.toISOString(),
+      updatedAt: submittedAt.toISOString()
+    };
+    db.verificationDocuments.push(doc);
+  }
+
+  // Create history entry
+  const historyEntry = {
+    id: genId('vh'),
+    documentId: doc.id,
+    userId,
+    documentType,
+    storagePath,
+    status: 'PENDING',
+    rejectionReason: null,
+    reviewedBy: null,
+    createdAt: submittedAt.toISOString()
+  };
+  db.verificationHistories.push(historyEntry);
+
+  try {
+    doc = await prisma.verificationDocument.upsert({
+      where: { userId_documentType: { userId, documentType } },
+      update: { storagePath, status: 'PENDING', rejectionReason: null, submittedAt },
+      create: { userId, documentType, storagePath, status: 'PENDING' }
+    });
+
+    await prisma.verificationHistory.create({
+      data: {
+        documentId: doc.id,
+        userId,
+        documentType,
+        storagePath,
+        status: 'PENDING'
+      }
+    });
+  } catch { /* DB fallback used above */ }
+
+  // Recalculate user overall status
+  const userDocs = db.verificationDocuments.filter((d: any) => d.userId === userId);
+  const overallStatus = calcHostOverallStatus(userDocs);
+
+  const user = db.users.find(u => u.id === userId);
+  if (user) {
+    user.verificationStatus = overallStatus === 'verified' ? 'verified' : (overallStatus === 'action_required' ? 'rejected' : 'pending');
+    user.verificationSubmittedAt = submittedAt.toISOString();
+  }
+
+  saveDB(db);
+
+  res.json({
+    success: true,
+    document: doc,
+    overallStatus
+  });
+});
+
+app.get("/api/admin/verification-documents", async (req, res) => {
+  if (!requireRole(req, res, 'SUPER_ADMIN', 'ADMIN', 'SUPPORT')) return;
+  const targetUserId = req.query.userId as string;
+
+  if (!Array.isArray(db.verificationDocuments)) db.verificationDocuments = [];
+  if (!Array.isArray(db.verificationHistories)) db.verificationHistories = [];
+
+  let docs: any[] = [];
+  try {
+    docs = await prisma.verificationDocument.findMany({
+      where: targetUserId ? { userId: targetUserId } : undefined,
+      include: {
+        user: { select: { id: true, name: true, email: true, phone: true, role: true } },
+        history: { orderBy: { createdAt: 'desc' } }
+      },
+      orderBy: { updatedAt: 'desc' }
+    });
+  } catch {
+    docs = db.verificationDocuments
+      .filter((d: any) => !targetUserId || d.userId === targetUserId)
+      .map((d: any) => {
+        const u = db.users.find(x => x.id === d.userId);
+        const history = db.verificationHistories.filter((h: any) => h.documentId === d.id);
+        return { ...d, user: u ? { id: u.id, name: u.name, email: u.email, phone: u.phone, role: u.role } : null, history };
+      });
+  }
+
+  res.json(docs);
+});
+
+app.post("/api/admin/verify-document", async (req, res) => {
+  if (!requireRole(req, res, 'SUPER_ADMIN', 'ADMIN')) return;
+
+  const { documentId, status, rejectionReason } = req.body;
+  if (!documentId || !['APPROVED', 'REJECTED'].includes(status)) {
+    return res.status(400).json({ error: "documentId and status (APPROVED | REJECTED) are required" });
+  }
+
+  if (status === 'REJECTED' && !rejectionReason?.trim()) {
+    return res.status(400).json({ error: "A rejection reason is strictly required when rejecting a document." });
+  }
+
+  if (!Array.isArray(db.verificationDocuments)) db.verificationDocuments = [];
+  if (!Array.isArray(db.verificationHistories)) db.verificationHistories = [];
+
+  const docIdx = db.verificationDocuments.findIndex((d: any) => d.id === documentId);
+  if (docIdx === -1) return res.status(404).json({ error: "Document not found" });
+
+  const reviewerId = req.auth?.sub || 'admin';
+  const now = new Date();
+
+  db.verificationDocuments[docIdx] = {
+    ...db.verificationDocuments[docIdx],
+    status,
+    rejectionReason: status === 'REJECTED' ? rejectionReason.trim() : null,
+    reviewedAt: now.toISOString(),
+    reviewedBy: reviewerId,
+    updatedAt: now.toISOString()
+  };
+
+  const doc = db.verificationDocuments[docIdx];
+
+  // Add history record
+  const historyEntry = {
+    id: genId('vh'),
+    documentId: doc.id,
+    userId: doc.userId,
+    documentType: doc.documentType,
+    storagePath: doc.storagePath,
+    status,
+    rejectionReason: status === 'REJECTED' ? rejectionReason.trim() : null,
+    reviewedBy: reviewerId,
+    createdAt: now.toISOString()
+  };
+  db.verificationHistories.push(historyEntry);
+
+  try {
+    await prisma.verificationDocument.update({
+      where: { id: documentId },
+      data: {
+        status,
+        rejectionReason: status === 'REJECTED' ? rejectionReason.trim() : null,
+        reviewedAt: now,
+        reviewedBy: reviewerId
+      }
+    });
+
+    await prisma.verificationHistory.create({
+      data: {
+        documentId: doc.id,
+        userId: doc.userId,
+        documentType: doc.documentType,
+        storagePath: doc.storagePath,
+        status,
+        rejectionReason: status === 'REJECTED' ? rejectionReason.trim() : null,
+        reviewedBy: reviewerId
+      }
+    });
+  } catch { /* DB fallback used above */ }
+
+  // Recalculate user overall status
+  const userDocs = db.verificationDocuments.filter((d: any) => d.userId === doc.userId);
+  const overallStatus = calcHostOverallStatus(userDocs);
+
+  const user = db.users.find(u => u.id === doc.userId);
+  if (user) {
+    user.verificationStatus = overallStatus === 'verified' ? 'verified' : (overallStatus === 'action_required' ? 'rejected' : 'pending');
+    user.isIdVerified = overallStatus === 'verified';
+  }
+
+  // Send notification to user
+  const docLabel = doc.documentType.replace(/_/g, ' ');
+  if (status === 'APPROVED') {
+    notifyUser(doc.userId, `Document Approved ✅`, `Your ${docLabel} document has been verified.`, "verification", { documentType: doc.documentType, status });
+  } else {
+    notifyUser(doc.userId, `Action Required for ${docLabel} ❌`, `Reason: ${rejectionReason}. Please re-upload this document.`, "verification", { documentType: doc.documentType, status, rejectionReason });
+  }
+
+  saveDB(db);
+
+  res.json({
+    success: true,
+    document: doc,
+    overallStatus
+  });
+});
+
+// ── RIDE MANAGEMENT ─────────────────────────────────────────────────────────
 
 app.get("/api/admin/rides", (req, res) => {
   if (!requireRole(req, res, 'SUPER_ADMIN', 'ADMIN', 'OPERATIONS')) return;

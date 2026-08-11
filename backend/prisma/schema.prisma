@@ -150,6 +150,7 @@ model User {
   chatMessages  ChatMessage[]
   supportTickets SupportTicket[]
   guestCredits  GuestCredit[]
+  verificationDocuments VerificationDocument[]
 
   @@index([email])
   @@index([phone])
@@ -563,3 +564,58 @@ model NotificationTemplate {
 
   @@map("notification_templates")
 }
+
+enum DocumentType {
+  GOVERNMENT_ID
+  DRIVING_LICENSE
+  VEHICLE_RC
+  INSURANCE
+  PROFILE_PHOTO
+}
+
+enum DocumentStatus {
+  PENDING
+  APPROVED
+  REJECTED
+}
+
+model VerificationDocument {
+  id              String               @id @default(uuid())
+  userId          String
+  documentType    DocumentType
+  storagePath     String
+  status          DocumentStatus       @default(PENDING)
+  rejectionReason String?
+  submittedAt     DateTime             @default(now())
+  reviewedAt      DateTime?
+  reviewedBy      String?
+  createdAt       DateTime             @default(now())
+  updatedAt       DateTime             @updatedAt
+
+  user            User                 @relation(fields: [userId], references: [id], onDelete: Cascade)
+  history         VerificationHistory[]
+
+  @@unique([userId, documentType])
+  @@index([userId])
+  @@index([status])
+  @@map("verification_documents")
+}
+
+model VerificationHistory {
+  id              String               @id @default(uuid())
+  documentId      String
+  userId          String
+  documentType    DocumentType
+  storagePath     String
+  status          DocumentStatus
+  rejectionReason String?
+  reviewedBy      String?
+  createdAt       DateTime             @default(now())
+
+  document        VerificationDocument @relation(fields: [documentId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@index([documentId])
+  @@map("verification_histories")
+}
+

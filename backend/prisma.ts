@@ -124,6 +124,8 @@ function getModelArray(modelName: string): any[] {
     case 'cmspage': return d.cmsPages || [];
     case 'subscriptionplan': return d.subscriptionPlans || [];
     case 'notificationtemplate': return d.notificationTemplates || [];
+    case 'verificationdocument': return d.verificationDocuments || [];
+    case 'verificationhistory': return d.verificationHistories || [];
     default: return [];
   }
 }
@@ -182,6 +184,8 @@ function setModelArray(modelName: string, arr: any[]) {
     case 'cmspage': d.cmsPages = arr; break;
     case 'subscriptionplan': d.subscriptionPlans = arr; break;
     case 'notificationtemplate': d.notificationTemplates = arr; break;
+    case 'verificationdocument': d.verificationDocuments = arr; break;
+    case 'verificationhistory': d.verificationHistories = arr; break;
   }
 }
 

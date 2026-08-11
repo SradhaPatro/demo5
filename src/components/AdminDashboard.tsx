@@ -599,61 +599,209 @@ const DocImage = ({ label, url }: { label: string; url?: string }) => {
   );
 };
 
-const KYCDetailModal = ({ user, onClose, onApprove, onReject, busy }: {
-  user: any; onClose: () => void; busy: boolean;
-  onApprove: () => void; onReject: (reason: string) => void;
-}) => {
-  const [rejecting, setRejecting] = useState(false);
-  const [reason, setReason] = useState('');
+const UserVerificationModal = ({ user, onClose, onRefresh }: { user: any; onClose: () => void; onRefresh: () => void }) => {
+  const { api } = useAdmin();
+  const [docRecords, setDocRecords] = useState<any[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [rejectingDocId, setRejectingDocId] = useState<string | null>(null);
+  const [rejectReason, setRejectReason] = useState('');
+  const [error, setError] = useState<string | null>(null);
+  const [actionBusy, setActionBusy] = useState(false);
+
+  const docTypes = [
+    { type: 'GOVERNMENT_ID', label: 'Government ID (Aadhaar / Passport)' },
+    { type: 'DRIVING_LICENSE', label: 'Driving License' },
+    { type: 'VEHICLE_RC', label: 'Vehicle Registration Certificate (RC)' },
+    { type: 'INSURANCE', label: 'Vehicle Insurance Policy' },
+    { type: 'PROFILE_PHOTO', label: 'Profile / Selfie Photo' },
+  ];
+
+  const loadDocs = useCallback(async () => {
+    setLoading(true);
+    try {
+      const res = await api.get(`/api/admin/verification-documents?userId=${user.id}`);
+      setDocRecords(Array.isArray(res) ? res : []);
+    } catch (e: any) {
+      setError(e.message || 'Failed to load verification documents.');
+    } finally {
+      setLoading(false);
+    }
+  }, [api, user.id]);
+
+  useEffect(() => { loadDocs(); }, [loadDocs]);
+
+  const docMap = new Map<string, any>(docRecords.map(d => [d.documentType, d]));
+
+  const handleDocAction = async (docId: string, status: 'APPROVED' | 'REJECTED') => {
+    if (status === 'REJECTED' && !rejectReason.trim()) {
+      setError('A rejection reason is strictly required when rejecting a document.');
+      return;
+    }
+
+    setActionBusy(true);
+    setError(null);
+    try {
+      await api.post('/api/admin/verify-document', {
+        documentId: docId,
+        status,
+        rejectionReason: status === 'REJECTED' ? rejectReason.trim() : undefined
+      });
+      setRejectingDocId(null);
+      setRejectReason('');
+      await loadDocs();
+      onRefresh();
+    } catch (e: any) {
+      setError(e.message || 'Failed to update document status.');
+    } finally {
+      setActionBusy(false);
+    }
+  };
 
   return (
-    <div className="fixed inset-0 z-[70] flex items-center justify-center bg-slate-900/60 backdrop-blur-sm p-4" onClick={onClose}>
-      <div className="bg-white rounded-2xl shadow-2xl w-full max-w-lg max-h-[92vh] overflow-y-auto" onClick={e => e.stopPropagation()}>
-        <div className="flex items-center justify-between px-5 py-4 border-b border-gray-100 sticky top-0 bg-white rounded-t-2xl">
-          <div className="flex items-center gap-2">
-            <ShieldCheck className="w-5 h-5 text-indigo-500" />
-            <h3 className="font-bold text-gray-900">Verification Review</h3>
-          </div>
-          <button onClick={onClose} className="p-1.5 rounded-lg hover:bg-gray-100 text-gray-400"><X className="w-4 h-4" /></button>
-        </div>
-        <div className="p-5 space-y-5">
+    <div className="fixed inset-0 z-50 bg-black/60 backdrop-blur-sm flex items-center justify-center p-4 overflow-y-auto">
+      <div className="bg-white rounded-2xl max-w-3xl w-full p-6 shadow-2xl space-y-6 max-h-[90vh] overflow-y-auto">
+        
+        {/* Header */}
+        <div className="flex items-center justify-between pb-4 border-b border-gray-100">
           <div className="flex items-center gap-3">
-            <img src={user.avatarUrl} className="w-14 h-14 rounded-full object-cover border border-gray-200" alt="" />
+            <img src={user.avatarUrl || `https://ui-avatars.com/api/?name=${encodeURIComponent(user.name)}`} className="w-12 h-12 rounded-full object-cover border border-gray-200" alt="" />
             <div>
-              <p className="font-bold text-gray-900">{user.name}</p>
-              <p className="text-xs text-gray-500">{user.email} . {user.phone}</p>
-              <p className="text-xs text-amber-600 mt-0.5">Submitted: {user.verificationSubmittedAt ? new Date(user.verificationSubmittedAt).toLocaleString() : 'N/A'}</p>
+              <h3 className="font-bold text-gray-900 text-lg">{user.name}</h3>
+              <p className="text-xs text-gray-500">{user.email} • {user.phone || 'No phone'}</p>
+              <p className="text-xs font-semibold text-indigo-600 mt-0.5">Host Dossier Audit</p>
             </div>
           </div>
-          <div>
-            <p className="text-xs font-bold uppercase tracking-wide text-gray-400 mb-2">Live Selfie</p>
-            {user.selfieImage ? <img src={user.selfieImage || undefined} alt="Selfie" referrerPolicy="no-referrer" className="w-32 h-32 rounded-xl object-cover border-2 border-indigo-200" /> : <div className="w-32 h-32 rounded-xl border-2 border-dashed border-gray-200 flex items-center justify-center text-xs text-gray-300 text-center px-2">No selfie captured</div>}
-          </div>
-          <div>
-            <p className="text-xs font-bold uppercase tracking-wide text-gray-400 mb-1">Documents</p>
-            <Card className="px-4 py-1">
-              <DocRow label="Driving Licence No." value={user.licenceNumber} mono />
-              <DocRow label="Aadhaar No." value={user.aadhaarNumber} mono />
-              <DocRow label="Vehicle RC No." value={user.vehicleRcNumber} mono />
-            </Card>
-            <div className="grid grid-cols-3 gap-3 mt-3">
-              <DocImage label="Licence scan" url={user.licenceImageUrl} />
-              <DocImage label="Aadhaar scan" url={user.aadhaarImageUrl} />
-              <DocImage label="Vehicle RC" url={user.vehicleRcImageUrl} />
-            </div>
-            <p className="text-[11px] text-gray-400 mt-2 leading-relaxed">Click a scan to open it full size. Review the document numbers and scans against the live selfie before approving.</p>
-          </div>
-          {rejecting && (
-            <Textarea label="Reason for rejection (sent to the user)" value={reason} onChange={(e: any) => setReason(e.target.value)} rows={2} placeholder="e.g. Aadhaar number does not match the name on the selfie." />
-          )}
+          <Btn variant="ghost" size="sm" onClick={onClose}><XCircle className="w-5 h-5" /></Btn>
         </div>
-        <div className="flex items-center justify-end gap-2 px-5 py-4 border-t border-gray-100 sticky bottom-0 bg-white">
-          {rejecting ? (
-            <><Btn variant="secondary" size="md" onClick={() => setRejecting(false)}>Back</Btn><Btn variant="danger" size="md" disabled={busy} onClick={() => onReject(reason)}><XCircle className="w-4 h-4" /> Confirm Reject</Btn></>
-          ) : (
-            <><Btn variant="secondary" size="md" onClick={() => setRejecting(true)}><XCircle className="w-4 h-4" /> Reject</Btn><Btn variant="success" size="md" disabled={busy} onClick={onApprove}><CheckCircle className="w-4 h-4" /> Approve</Btn></>
-          )}
+
+        {error && <ErrorBanner message={error} onDismiss={() => setError(null)} />}
+
+        {loading ? (
+          <div className="flex items-center justify-center py-12">
+            <Loader className="w-8 h-8 text-indigo-600 animate-spin" />
+          </div>
+        ) : (
+          <div className="space-y-4">
+            <h4 className="text-xs font-bold uppercase tracking-wider text-gray-500">Per-Document Verification & Audit History</h4>
+
+            {docTypes.map(dt => {
+              const rec = docMap.get(dt.type);
+              const isRejectingThis = rejectingDocId === rec?.id;
+
+              return (
+                <Card key={dt.type} className="p-4 space-y-3 border-gray-200">
+                  <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+                    <div>
+                      <span className="text-xs font-bold text-gray-900 block">{dt.label}</span>
+                      {rec ? (
+                        <span className="text-[11px] text-gray-400">
+                          Submitted: {new Date(rec.submittedAt).toLocaleString()}
+                        </span>
+                      ) : (
+                        <span className="text-[11px] text-gray-400 italic">Not submitted by host yet</span>
+                      )}
+                    </div>
+
+                    <div className="flex items-center gap-2">
+                      {rec?.status === 'APPROVED' && (
+                        <span className="px-2.5 py-1 bg-green-100 text-green-700 text-xs font-bold rounded-lg flex items-center gap-1">
+                          <CheckCircle className="w-3.5 h-3.5" /> Approved
+                        </span>
+                      )}
+                      {rec?.status === 'PENDING' && (
+                        <span className="px-2.5 py-1 bg-amber-100 text-amber-700 text-xs font-bold rounded-lg flex items-center gap-1">
+                          <Clock className="w-3.5 h-3.5 animate-spin" /> Pending Review
+                        </span>
+                      )}
+                      {rec?.status === 'REJECTED' && (
+                        <span className="px-2.5 py-1 bg-red-100 text-red-700 text-xs font-bold rounded-lg flex items-center gap-1">
+                          <XCircle className="w-3.5 h-3.5" /> Rejected
+                        </span>
+                      )}
+
+                      {rec && (
+                        <div className="flex items-center gap-1.5 ml-2">
+                          <Btn 
+                            variant="secondary" 
+                            size="sm"
+                            onClick={() => window.open(rec.storagePath.startsWith('http') ? rec.storagePath : `https://snrdfprgypioxhskthcm.supabase.co/storage/v1/object/public/verification-documents/${rec.storagePath}`, '_blank')}
+                          >
+                            <Eye className="w-3.5 h-3.5" /> View
+                          </Btn>
+                          
+                          <Btn 
+                            variant="success" 
+                            size="sm" 
+                            disabled={actionBusy || rec.status === 'APPROVED'}
+                            onClick={() => handleDocAction(rec.id, 'APPROVED')}
+                          >
+                            <CheckCircle className="w-3.5 h-3.5" /> Approve
+                          </Btn>
+
+                          <Btn 
+                            variant="danger" 
+                            size="sm" 
+                            disabled={actionBusy}
+                            onClick={() => { setRejectingDocId(rec.id); setRejectReason(rec.rejectionReason || ''); }}
+                          >
+                            <XCircle className="w-3.5 h-3.5" /> Reject
+                          </Btn>
+                        </div>
+                      )}
+                    </div>
+                  </div>
+
+                  {/* Rejection Form Box */}
+                  {isRejectingThis && (
+                    <div className="p-3 bg-red-50 border border-red-200 rounded-xl space-y-2.5 text-left">
+                      <label className="block text-xs font-bold text-red-900">
+                        Mandatory Rejection Reason (sent directly to Host):
+                      </label>
+                      <textarea
+                        required
+                        value={rejectReason}
+                        onChange={e => setRejectReason(e.target.value)}
+                        placeholder="e.g. Image is blurry and driving license number is unreadable."
+                        rows={2}
+                        className="w-full text-xs p-2.5 border border-red-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-red-500 bg-white"
+                      />
+                      <div className="flex justify-end gap-2">
+                        <Btn variant="ghost" size="sm" onClick={() => setRejectingDocId(null)}>Cancel</Btn>
+                        <Btn variant="danger" size="sm" disabled={actionBusy} onClick={() => handleDocAction(rec.id, 'REJECTED')}>
+                          Confirm Rejection
+                        </Btn>
+                      </div>
+                    </div>
+                  )}
+
+                  {/* Audit History Timeline */}
+                  {rec?.history && rec.history.length > 0 && (
+                    <div className="pt-2 border-t border-gray-100">
+                      <span className="text-[10px] font-bold uppercase tracking-wider text-gray-400 block mb-1">Audit History:</span>
+                      <div className="space-y-1">
+                        {rec.history.map((h: any, hIdx: number) => (
+                          <div key={h.id || hIdx} className="text-[11px] text-gray-600 flex items-center justify-between bg-gray-50 px-2.5 py-1 rounded">
+                            <span>
+                              <strong>{new Date(h.createdAt).toLocaleDateString()}</strong>: Set to <span className={h.status === 'APPROVED' ? 'text-green-600 font-bold' : h.status === 'REJECTED' ? 'text-red-600 font-bold' : 'text-amber-600 font-bold'}>{h.status}</span>
+                              {h.rejectionReason && <span className="text-red-500"> — "{h.rejectionReason}"</span>}
+                            </span>
+                            <span className="text-[10px] text-gray-400">By: {h.reviewedBy || 'System'}</span>
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  )}
+
+                </Card>
+              );
+            })}
+          </div>
+        )}
+
+        <div className="flex justify-end pt-4 border-t border-gray-100">
+          <Btn variant="secondary" size="md" onClick={onClose}>Close Dossier</Btn>
         </div>
+
       </div>
     </div>
   );
@@ -663,58 +811,63 @@ const KYCSection = () => {
   const { api } = useAdmin();
   const [queue, setQueue] = useState<any[]>([]);
   const [selected, setSelected] = useState<any>(null);
-  const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
   const load = useCallback(() => {
-    api.get('/api/admin/kyc-queue')
-      .then(res => setQueue(Array.isArray(res) ? res : (res?.data || res?.items || [])))
+    api.get('/api/admin/users')
+      .then(res => {
+        const users = Array.isArray(res) ? res : (res?.data || res?.items || []);
+        // Filter users who have submitted documents or pending/action_required status
+        setQueue(users.filter((u: any) => u.verificationStatus === 'pending' || u.verificationStatus === 'rejected' || u.verificationSubmittedAt));
+      })
       .catch(e => setError(e.message));
   }, [api]);
-  useEffect(() => { load(); }, [load]);
 
-  const act = async (userId: string, action: 'verify' | 'reject', reason = '') => {
-    setBusy(true);
-    try {
-      await api.put(`/api/admin/users/${userId}/action`, { action, reason });
-      setSelected(null);
-      load();
-    } catch (e: any) { setError(e.message); }
-    setBusy(false);
-  };
+  useEffect(() => { load(); }, [load]);
 
   return (
     <div className="space-y-4">
       <ErrorBanner message={error} onDismiss={() => setError(null)} />
-      <p className="text-sm text-gray-500">{queue.length} users awaiting KYC verification</p>
+      <div className="flex items-center justify-between">
+        <p className="text-sm font-semibold text-gray-700">{queue.length} Hosts in Verification Pipeline</p>
+        <Btn variant="secondary" size="sm" onClick={load}><RefreshCw className="w-3.5 h-3.5" /> Refresh Queue</Btn>
+      </div>
+
       {queue.length === 0 && (
         <Card className="p-12 flex flex-col items-center gap-3 text-center">
           <CheckCircle className="w-12 h-12 text-green-400" />
-          <p className="text-lg font-semibold text-gray-700">All clear!</p>
-          <p className="text-sm text-gray-400">No pending KYC requests</p>
+          <p className="text-lg font-semibold text-gray-700">All Clear!</p>
+          <p className="text-sm text-gray-400">No pending Host verification requests</p>
         </Card>
       )}
+
       <div className="grid gap-4">
         {queue.map((u: any) => (
           <Card key={u.id} className="p-4 flex items-center justify-between hover:border-indigo-200 hover:shadow-md transition cursor-pointer" onClick={() => setSelected(u)}>
             <div className="flex items-center gap-3">
-              <img src={u.avatarUrl} className="w-10 h-10 rounded-full object-cover" alt="" />
+              <img src={u.avatarUrl || `https://ui-avatars.com/api/?name=${encodeURIComponent(u.name)}`} className="w-10 h-10 rounded-full object-cover" alt="" />
               <div>
-                <p className="font-medium">{u.name}</p>
-                <p className="text-xs text-gray-400">{u.email} . {u.phone}</p>
+                <p className="font-medium text-gray-900">{u.name}</p>
+                <p className="text-xs text-gray-400">{u.email} • {u.phone || 'No phone'}</p>
                 <p className="text-xs text-amber-600 mt-0.5">Submitted: {u.verificationSubmittedAt ? new Date(u.verificationSubmittedAt).toLocaleDateString() : 'N/A'}</p>
               </div>
             </div>
-            <div className="flex items-center gap-2" onClick={e => e.stopPropagation()}>
-              <Btn variant="ghost" size="sm" onClick={() => setSelected(u)}>Review</Btn>
-              <Btn variant="success" size="sm" disabled={busy} onClick={() => act(u.id, 'verify')}><CheckCircle className="w-3 h-3" /> Approve</Btn>
-              <Btn variant="danger" size="sm" onClick={() => setSelected(u)}><XCircle className="w-3 h-3" /> Reject</Btn>
+            <div className="flex items-center gap-3" onClick={e => e.stopPropagation()}>
+              <StatusBadge status={u.verificationStatus || 'none'} />
+              <Btn variant="primary" size="sm" onClick={() => setSelected(u)}>
+                <FileCheck className="w-3.5 h-3.5" /> Review Documents
+              </Btn>
             </div>
           </Card>
         ))}
       </div>
+
       {selected && (
-        <KYCDetailModal user={selected} busy={busy} onClose={() => setSelected(null)} onApprove={() => act(selected.id, 'verify')} onReject={(reason) => act(selected.id, 'reject', reason)} />
+        <UserVerificationModal 
+          user={selected} 
+          onClose={() => setSelected(null)} 
+          onRefresh={load} 
+        />
       )}
     </div>
   );
