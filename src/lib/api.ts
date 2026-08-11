@@ -41,7 +41,9 @@ function tryRefresh(): Promise<boolean> {
   const rt = getRefreshToken();
   if (!rt) return Promise.resolve(false);
   if (!refreshing) {
-    refreshing = origFetch('/api/auth/refresh', {
+    // Use resolveUrl so the refresh request hits the Railway backend in production,
+    // not the Vercel origin (which would 404).
+    refreshing = origFetch(resolveUrl('/api/auth/refresh'), {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ refreshToken: rt }),

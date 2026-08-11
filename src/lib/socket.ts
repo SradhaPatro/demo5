@@ -8,7 +8,10 @@ export function getSocket(): Socket | null {
 }
 
 function createSocket(): Socket {
-  return io("/", {
+  // In production (Vercel), VITE_API_URL points to the Railway backend.
+  // In development, connect to "/" so Vite dev-server proxy handles it.
+  const serverUrl = (import.meta.env.VITE_API_URL as string | undefined) || "/";
+  return io(serverUrl, {
     path: "/socket.io",
     auth: (cb) => cb({ token: getToken() }),
     transports: ["websocket", "polling"],
