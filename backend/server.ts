@@ -27,7 +27,7 @@ import {
   Payment,
   Trip,
 } from "../src/types";
-import { signTokens, verifyRefreshToken, requireAuth } from "./auth";
+import { signTokens, verifyRefreshToken, requireAuth, verifySupabaseToken, bearerFrom } from "./auth";
 import {
   startTrip,
   confirmPickup,
@@ -874,25 +874,36 @@ app.post("/api/auth/verify-otp", async (req, res) => {
 
 // SYNC SUPABASE AUTH USER WITH MOVEBUDDY PRISMA USER
 app.post("/api/auth/sync-supabase-user", async (req, res) => {
-  const { supabaseAuthUserId, email, name, phone, role } = req.body;
-  if (!supabaseAuthUserId || !email) {
-    return res.status(400).json({ error: "Missing required parameters supabaseAuthUserId or email." });
+  const token = bearerFrom(req);
+  if (!token) {
+    return res.status(401).json({ error: "Missing Authorization Bearer token" });
   }
 
-  let user = db.users.find(u => (u as any).supabaseAuthUserId === supabaseAuthUserId || u.email.toLowerCase() === email.toLowerCase());
+  const authUser = await verifySupabaseToken(token, supabaseAdmin);
+  if (!authUser || !authUser.email) {
+    return res.status(401).json({ error: "Invalid or expired Supabase access token" });
+  }
+
+  const supabaseAuthUserId = authUser.id;
+  const email = authUser.email.toLowerCase();
+  const metaName = authUser.user_metadata?.name || req.body.name;
+  const metaPhone = authUser.user_metadata?.phone || req.body.phone;
+  const metaRole = authUser.user_metadata?.role || req.body.role;
+
+  let user = db.users.find(u => (u as any).supabaseAuthUserId === supabaseAuthUserId || u.email.toLowerCase() === email);
 
   if (user) {
     (user as any).supabaseAuthUserId = supabaseAuthUserId;
     (user as any).emailVerified = true;
-    if (name && (!user.name || user.name === email.split('@')[0])) user.name = name;
-    if (phone && !user.phone) user.phone = phone;
+    if (metaName && (!user.name || user.name === email.split('@')[0])) user.name = metaName;
+    if (metaPhone && !user.phone) user.phone = metaPhone;
   } else {
     user = {
       id: randomUUID(),
-      name: name || email.split('@')[0],
-      email: email.toLowerCase(),
-      phone: phone || "",
-      role: (role === 'host' ? 'host' : 'guest') as any,
+      name: metaName || email.split('@')[0],
+      email: email,
+      phone: metaPhone || "",
+      role: (metaRole === 'host' ? 'host' : 'guest') as any,
       gender: 'other',
       avatarUrl: '',
       buddyScore: 50,
@@ -931,8 +942,8 @@ app.post("/api/auth/sync-supabase-user", async (req, res) => {
     logger.error({ err }, "[server] sync-supabase-user Prisma error");
   }
 
-  const { token, refreshToken } = signTokens(user);
-  res.json({ success: true, token, refreshToken, user });
+  const { token: appToken, refreshToken } = signTokens(user);
+  res.json({ success: true, token: appToken, refreshToken, user });
 });
 
 // REFRESH ACCESS TOKEN — exchange a valid refresh token for a fresh access token.

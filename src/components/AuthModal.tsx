@@ -25,13 +25,14 @@ export default function AuthModal({ onClose, onSuccess, defaultRole = 'guest' }:
   const [error, setError] = useState('');
   const [resendStatus, setResendStatus] = useState('');
 
-  const syncBackendUser = async (supabaseAuthUserId: string, userEmail: string, userName?: string, userPhone?: string, userRole?: string) => {
+  const syncBackendUser = async (accessToken: string, userName?: string, userPhone?: string, userRole?: string) => {
     const res = await fetch('/api/auth/sync-supabase-user', {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': `Bearer ${accessToken}`
+      },
       body: JSON.stringify({
-        supabaseAuthUserId,
-        email: userEmail,
         name: userName,
         phone: userPhone,
         role: userRole || defaultRole
@@ -60,7 +61,7 @@ export default function AuthModal({ onClose, onSuccess, defaultRole = 'guest' }:
 
       const { user, session, error: loginErr } = await signInWithEmail(email.trim(), password);
 
-      if (loginErr || !user) {
+      if (loginErr || !user || !session?.access_token) {
         if (loginErr?.toLowerCase().includes('email not confirmed')) {
           setScreen(2);
           setIsLoading(false);
@@ -73,7 +74,7 @@ export default function AuthModal({ onClose, onSuccess, defaultRole = 'guest' }:
 
       // Sync verified Supabase user with backend Prisma DB
       try {
-        const mbUser = await syncBackendUser(user.id, user.email || email, name, phone, defaultRole);
+        const mbUser = await syncBackendUser(session.access_token, name, phone, defaultRole);
         setIsLoading(false);
         onSuccess(mbUser);
       } catch (err: any) {
@@ -114,9 +115,9 @@ export default function AuthModal({ onClose, onSuccess, defaultRole = 'guest' }:
       }
 
       // If instant session granted
-      if (user) {
+      if (user && session?.access_token) {
         try {
-          const mbUser = await syncBackendUser(user.id, user.email || email, name, phone, defaultRole);
+          const mbUser = await syncBackendUser(session.access_token, name, phone, defaultRole);
           setIsLoading(false);
           onSuccess(mbUser);
         } catch (err: any) {

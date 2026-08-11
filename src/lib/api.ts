@@ -28,9 +28,10 @@ function resolveUrl(url: string): string {
 }
 
 function withAuth(init: RequestInit = {}): RequestInit {
+  const headers = new Headers(init.headers || {});
+  if (headers.has('Authorization')) return init;
   const token = getToken();
   if (!token) return init;
-  const headers = new Headers(init.headers || {});
   headers.set('Authorization', `Bearer ${token}`);
   return { ...init, headers };
 }

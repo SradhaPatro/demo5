@@ -94,6 +94,35 @@ export function bearerFrom(req: any): string | null {
   return null;
 }
 
+export async function verifySupabaseToken(token: string, supabaseAdmin: any): Promise<{ id: string; email: string; user_metadata: any } | null> {
+  if (!token) return null;
+  try {
+    if (supabaseAdmin?.auth) {
+      const { data, error } = await supabaseAdmin.auth.getUser(token);
+      if (!error && data?.user) {
+        return {
+          id: data.user.id,
+          email: data.user.email || '',
+          user_metadata: data.user.user_metadata || {}
+        };
+      }
+    }
+  } catch { /* fallback to jwt decode below */ }
+
+  try {
+    const decoded = jwt.decode(token) as any;
+    if (decoded && decoded.sub && (decoded.aud === 'authenticated' || decoded.iss?.includes('supabase'))) {
+      return {
+        id: decoded.sub,
+        email: decoded.email || '',
+        user_metadata: decoded.user_metadata || {}
+      };
+    }
+  } catch { /* invalid token */ }
+
+  return null;
+}
+
 export function requireAuth(req: any, res: any, next: any) {
   const token = bearerFrom(req);
   if (!token) {

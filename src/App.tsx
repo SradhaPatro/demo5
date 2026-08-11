@@ -77,13 +77,14 @@ export default function App() {
 
           const res = await fetch('/api/auth/sync-supabase-user', {
             method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
+            headers: {
+              'Content-Type': 'application/json',
+              'Authorization': `Bearer ${session.access_token}`
+            },
             body: JSON.stringify({
-              supabaseAuthUserId: session.user.id,
-              email: session.user.email,
-              name: session.user.user_metadata?.name || session.user.email?.split('@')[0],
-              phone: session.user.user_metadata?.phone || '',
-              role: session.user.user_metadata?.role || 'guest'
+              name: session.user.user_metadata?.name,
+              phone: session.user.user_metadata?.phone,
+              role: session.user.user_metadata?.role
             })
           });
 
