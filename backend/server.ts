@@ -2953,10 +2953,17 @@ if (!process.env.VERCEL) {
         });
         app.use(vite.middlewares);
       } else {
-        const distPath = path.join(process.cwd(), 'dist');
-        app.use(express.static(distPath));
-        app.get('*', (req, res) => {
-          res.sendFile(path.join(distPath, 'index.html'));
+        // Production: frontend is deployed on Vercel — do NOT serve static files here.
+        // Return a simple health-check for the root so Render shows a working URL.
+        app.get("/", (_req, res) => {
+          res.json({ status: "ok", message: "MoveBuddy API is running" });
+        });
+        app.get("/health", (_req, res) => {
+          res.json({ status: "ok", uptime: process.uptime() });
+        });
+        // Any other non-API route → 404 JSON (avoids crashing on missing dist/)
+        app.get("*", (_req, res) => {
+          res.status(404).json({ error: "Not found. Frontend is served from Vercel." });
         });
       }
       return { viteMs: Date.now() - t3 };
