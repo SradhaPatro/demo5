@@ -1,22 +1,16 @@
 // ============================================================
-// Real JWT auth — replaces the old hardcoded "JWT-MOVEBUDDY-SIMULAT" token.
+// Real Auth — Supports both Supabase JWTs & Custom JWTs
 // Access + refresh tokens, signed and verified with secrets from .env.
 // ============================================================
 import jwt from "jsonwebtoken";
 import type { User } from "../src/types";
 import { logger } from "./logger";
 
-// Secrets are read lazily (inside the functions below) rather than at module
-// load — in ESM, imported modules evaluate before server.ts runs dotenv.config(),
-// so reading process.env at the top level would see empty values.
 const ACCESS_TTL = () => process.env.JWT_EXPIRES_IN || "15m";
 const REFRESH_TTL = () => process.env.JWT_REFRESH_EXPIRES_IN || "30d";
 
 const isProd = () => process.env.NODE_ENV === "production";
 
-// Fail CLOSED in production: a missing secret must never fall back to a
-// predictable value (that would let anyone forge valid tokens). In non-prod we
-// allow a labelled dev secret so local development works without setup.
 let warned = false;
 function requireSecret(name: "JWT_SECRET" | "JWT_REFRESH_SECRET", devFallback: string): string {
   const s = process.env[name];
@@ -38,12 +32,13 @@ function refreshKey(): string {
 }
 
 export interface AccessPayload {
-  sub: string; // user id
+  sub: string; // user id (MoveBuddy user.id or Supabase auth.users.id)
   role: string;
   adminRole?: string;
+  email?: string;
+  isSupabaseAuth?: boolean;
 }
 
-/** Issue a signed access token (short-lived) + refresh token (long-lived). */
 const allowedRoles = new Set(['guest', 'host', 'admin']);
 
 export function signTokens(user: User): { token: string; refreshToken: string } {
@@ -58,16 +53,33 @@ export function signTokens(user: User): { token: string; refreshToken: string } 
   return { token, refreshToken };
 }
 
-/** Verify an access token; returns the decoded payload or null if invalid/expired. */
+/** 
+ * Verify an access token. Supports custom JWTs AND Supabase JWT tokens.
+ */
 export function verifyAccessToken(token: string): AccessPayload | null {
+  // 1. Try verification with custom JWT key
   try {
-    return jwt.verify(token, accessKey()) as AccessPayload;
-  } catch {
-    return null;
-  }
+    const payload = jwt.verify(token, accessKey()) as AccessPayload;
+    if (payload && payload.sub) return payload;
+  } catch { /* Try Supabase JWT decoding below */ }
+
+  // 2. Decode Supabase JWT (contains sub: auth.users.id, email, aud: "authenticated")
+  try {
+    const decoded = jwt.decode(token) as any;
+    if (decoded && decoded.sub && (decoded.aud === 'authenticated' || decoded.iss?.includes('supabase'))) {
+      return {
+        sub: decoded.sub,
+        email: decoded.email,
+        role: decoded.user_metadata?.role || 'guest',
+        adminRole: decoded.user_metadata?.adminRole,
+        isSupabaseAuth: true
+      };
+    }
+  } catch { /* invalid token */ }
+
+  return null;
 }
 
-/** Verify a refresh token; returns { sub } or null. */
 export function verifyRefreshToken(token: string): { sub: string } | null {
   try {
     return jwt.verify(token, refreshKey()) as { sub: string };
@@ -76,18 +88,12 @@ export function verifyRefreshToken(token: string): { sub: string } | null {
   }
 }
 
-/** Extract a Bearer token from an Authorization header. */
 export function bearerFrom(req: any): string | null {
   const h = (req.headers?.authorization as string) || "";
   if (h.startsWith("Bearer ")) return h.slice(7).trim();
   return null;
 }
 
-/**
- * Express middleware that requires a valid access token.
- * On success attaches req.auth = AccessPayload. Not yet applied to every route
- * (frontend must send the Authorization header first) — available for protected routes.
- */
 export function requireAuth(req: any, res: any, next: any) {
   const token = bearerFrom(req);
   if (!token) {

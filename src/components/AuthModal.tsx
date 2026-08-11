@@ -1,7 +1,8 @@
 import React, { useState } from 'react';
 import { User, UserRole } from '../types';
-import { X, Shield, Phone, Mail, User as UserIcon, CheckCircle, ArrowRight, Loader } from 'lucide-react';
+import { X, Shield, Mail, Lock, User as UserIcon, Phone, CheckCircle, ArrowRight, Loader, RefreshCw } from 'lucide-react';
 import { setTokens } from '../lib/session';
+import { signUpWithEmail, signInWithEmail, resendVerificationEmail } from '../lib/supabaseClient';
 
 interface AuthModalProps {
   onClose: () => void;
@@ -13,161 +14,127 @@ export default function AuthModal({ onClose, onSuccess, defaultRole = 'guest' }:
   const [isLogin, setIsLogin] = useState(true);
   const [name, setName] = useState('');
   const [email, setEmail] = useState('');
+  const [password, setPassword] = useState('');
   const [phone, setPhone] = useState('');
   const [gender, setGender] = useState<'male' | 'female' | 'other'>('male');
   const [collegeOrCompany, setCollegeOrCompany] = useState('');
 
-  const [step, setStep] = useState<1 | 2>(1);
-  const [otp, setOtp] = useState(['', '', '', '', '', '']);
+  // Screen states: 1 = Auth Form, 2 = Check Email Banner, 3 = Email Sent Success
+  const [screen, setScreen] = useState<1 | 2>(1);
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState('');
-  const [sessionUser, setSessionUser] = useState<User | null>(null);
+  const [resendStatus, setResendStatus] = useState('');
 
-  const isEmail = (v: string) => v.includes('@');
+  const syncBackendUser = async (supabaseAuthUserId: string, userEmail: string, userName?: string, userPhone?: string, userRole?: string) => {
+    const res = await fetch('/api/auth/sync-supabase-user', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        supabaseAuthUserId,
+        email: userEmail,
+        name: userName,
+        phone: userPhone,
+        role: userRole || defaultRole
+      })
+    });
+    const data = await res.json();
+    if (!res.ok || !data.success) {
+      throw new Error(data.error || 'Failed to synchronize user account');
+    }
+    setTokens(data.token, data.refreshToken);
+    return data.user;
+  };
 
-  const handleSendOtp = async (e: React.FormEvent) => {
+  const handleAuthSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setError('');
     setIsLoading(true);
-
-    const contact = phone.trim();
-    const toE164 = (raw: string) => {
-      let d = raw.replace(/[^\d+]/g, '');
-      if (d.startsWith('+')) return d;
-      d = d.replace(/^0+/, '');
-      if (d.length === 10) return '+91' + d;
-      return '+' + d;
-    };
-    const phoneE164 = isEmail(contact) ? contact : toE164(contact);
 
     if (isLogin) {
-      if (!contact) {
-        setError('Please enter your registered Email or Phone number');
+      // ── SUPABASE LOGIN FLOW ──
+      if (!email || !password) {
+        setError('Please enter both Email and Password');
         setIsLoading(false);
         return;
       }
+
+      const { user, session, error: loginErr } = await signInWithEmail(email.trim(), password);
+
+      if (loginErr || !user) {
+        if (loginErr?.toLowerCase().includes('email not confirmed')) {
+          setScreen(2);
+          setIsLoading(false);
+          return;
+        }
+        setError(loginErr || 'Invalid email or password');
+        setIsLoading(false);
+        return;
+      }
+
+      // Sync verified Supabase user with backend Prisma DB
       try {
-        const response = await fetch('/api/auth/login', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ phoneOrEmail: contact })
-        });
-        let data: any;
-        try {
-          data = await response.json();
-        } catch {
-          setError(`Server error (${response.status}). Please try again.`);
-          return;
-        }
-
-        if (!response.ok || data.error) {
-          setError(data.error || `Request failed with status ${response.status}`);
-          setIsLoading(false);
-          return;
-        }
-
-        if (data.isNew) {
-          setIsLogin(false);
-          setIsLoading(false);
-          setError('Account not found. Please complete the registration form below!');
-          return;
-        }
-        setSessionUser(data.user);
-        setStep(2);
+        const mbUser = await syncBackendUser(user.id, user.email || email, name, phone, defaultRole);
+        setIsLoading(false);
+        onSuccess(mbUser);
       } catch (err: any) {
-        setError(err?.message || 'Could not send the verification code. Please try again.');
-      } finally {
+        setError(err.message);
         setIsLoading(false);
       }
+
     } else {
-      if (!name || !email || !phone) {
-        setError('Please fill in Name, Email, and Phone number');
+      // ── SUPABASE REGISTER FLOW ──
+      if (!name || !email || !password) {
+        setError('Please fill in Name, Email, and Password');
         setIsLoading(false);
         return;
       }
-      try {
-        const response = await fetch('/api/auth/register', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            name,
-            email,
-            phone: phoneE164,
-            gender,
-            companyOrCollege: collegeOrCompany,
-            role: defaultRole
-          })
-        });
-        let data: any;
+
+      if (password.length < 6) {
+        setError('Password must be at least 6 characters');
+        setIsLoading(false);
+        return;
+      }
+
+      const { user, session, error: signupErr, requiresEmailConfirmation } = await signUpWithEmail(
+        email.trim(),
+        password,
+        { name, phone, role: defaultRole }
+      );
+
+      if (signupErr) {
+        setError(signupErr);
+        setIsLoading(false);
+        return;
+      }
+
+      if (requiresEmailConfirmation) {
+        setScreen(2); // Show "Check your Email Inbox" screen
+        setIsLoading(false);
+        return;
+      }
+
+      // If instant session granted
+      if (user) {
         try {
-          data = await response.json();
-        } catch {
-          setError(`Server error (${response.status}). Please try again.`);
-          return;
-        }
-        if (!response.ok || data.error) {
-          setError(data.error || `Registration failed (${response.status})`);
+          const mbUser = await syncBackendUser(user.id, user.email || email, name, phone, defaultRole);
           setIsLoading(false);
-          return;
+          onSuccess(mbUser);
+        } catch (err: any) {
+          setError(err.message);
+          setIsLoading(false);
         }
-        setSessionUser(data.user);
-        setStep(2);
-      } catch (err: any) {
-        setError(err?.message || 'Registration failed. Please check your details and try again.');
-      } finally {
-        setIsLoading(false);
       }
     }
   };
 
-  const handleVerifyOtp = async (e: React.FormEvent) => {
-    e.preventDefault();
-    setIsLoading(true);
-    setError('');
-    const fullCode = otp.join('');
-
-    if (fullCode.length !== 6) {
-      setError('Please enter the full 6-digit code.');
-      setIsLoading(false);
-      return;
-    }
-
-    try {
-      const res = await fetch('/api/auth/verify-otp', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ userId: sessionUser?.id, code: fullCode }),
-      });
-      let data: any = {};
-      try {
-        data = await res.json();
-      } catch {
-        data = {};
-      }
-      if (!res.ok || !data.success) {
-        setError(data.error || 'Invalid code. Use 123456 to log in.');
-        setIsLoading(false);
-        return;
-      }
-
-      setTokens(data.token, data.refreshToken);
-      setIsLoading(false);
-      onSuccess(data.user || sessionUser);
-    } catch (err: any) {
-      setError(err?.message || 'Verification failed. Please try again.');
-      setIsLoading(false);
-    }
-  };
-
-  const handleOtpChange = (index: number, val: string) => {
-    if (isNaN(Number(val))) return;
-    const nextOtp = [...otp];
-    nextOtp[index] = val;
-    setOtp(nextOtp);
-
-    if (val && index < 5) {
-      const el = document.getElementById(`otp-${index + 1}`) as HTMLInputElement;
-      if (el) el.focus();
+  const handleResendEmail = async () => {
+    if (!email) return;
+    setResendStatus('Sending verification email...');
+    const { error: resendErr } = await resendVerificationEmail(email.trim());
+    if (resendErr) {
+      setResendStatus(`Failed: ${resendErr}`);
+    } else {
+      setResendStatus('✅ Verification email sent! Please check your inbox.');
     }
   };
 
@@ -185,7 +152,7 @@ export default function AuthModal({ onClose, onSuccess, defaultRole = 'guest' }:
           </button>
           <div className="flex items-center gap-2 mb-1">
             <Shield className="w-5 h-5 !text-[#2a2e34]" />
-            <span className="font-display font-black tracking-wider text-xs uppercase !text-[#2a2e34]">MoveBuddy Login</span>
+            <span className="font-display font-black tracking-wider text-xs uppercase !text-[#2a2e34]">MoveBuddy Auth</span>
           </div>
           <h2 className="font-display text-2xl font-bold !text-[#2a2e34]">Welcome to MoveBuddy</h2>
           <p className="text-sm !text-[#2a2e34]/85 mt-1 font-medium">Connecting reliable campus & office commute circles.</p>
@@ -199,176 +166,146 @@ export default function AuthModal({ onClose, onSuccess, defaultRole = 'guest' }:
             </div>
           )}
 
-          {step === 1 ? (
-            <form onSubmit={handleSendOtp} className="space-y-4">
-              <div id="auth_mode_selector" className="flex !bg-[#1c1f22] p-1 rounded-xl mb-4 border !border-[#ffb300]/10">
+          {screen === 2 ? (
+            /* EMAIL VERIFICATION REQUIRED SCREEN */
+            <div className="space-y-5 text-center py-4">
+              <div className="w-16 h-16 bg-[#ffb300]/20 rounded-full flex items-center justify-center mx-auto text-[#ffb300]">
+                <Mail className="w-8 h-8" />
+              </div>
+
+              <div>
+                <h3 className="text-xl font-bold text-white">Check Your Email Inbox 📬</h3>
+                <p className="text-sm text-gray-300 mt-2">
+                  We sent a real verification link to <strong className="text-[#ffb300]">{email}</strong>.
+                </p>
+                <p className="text-xs text-gray-400 mt-1">
+                  Please click the link inside your email to verify your MoveBuddy account.
+                </p>
+              </div>
+
+              <div className="pt-3 border-t border-gray-700 space-y-3">
+                {resendStatus && (
+                  <p className="text-xs font-semibold text-[#ffb300]">{resendStatus}</p>
+                )}
                 <button
                   type="button"
-                  id="tab_login"
+                  onClick={handleResendEmail}
+                  className="w-full py-2.5 px-4 bg-gray-700 hover:bg-gray-600 text-white rounded-xl text-sm font-semibold flex items-center justify-center gap-2 cursor-pointer transition"
+                >
+                  <RefreshCw className="w-4 h-4" /> Resend Verification Email
+                </button>
+
+                <button
+                  type="button"
+                  onClick={() => { setScreen(1); setIsLogin(true); }}
+                  className="text-xs text-[#ffb300] hover:underline"
+                >
+                  Already verified? Log in here
+                </button>
+              </div>
+            </div>
+          ) : (
+            /* LOGIN / REGISTER FORM SCREEN */
+            <form onSubmit={handleAuthSubmit} className="space-y-4">
+              <div className="flex border-b border-gray-700 mb-4">
+                <button
+                  type="button"
                   onClick={() => { setIsLogin(true); setError(''); }}
-                  className={`flex-1 py-1.5 text-center text-xs font-bold uppercase tracking-wider rounded-lg transition-all cursor-pointer ${
-                    isLogin 
-                      ? '!bg-[#ffb300] !text-[#2a2e34] shadow-sm' 
-                      : '!bg-transparent !text-[#e9eaec]/60 hover:!text-[#e9eaec]'
-                  }`}
+                  className={`flex-1 py-2 text-sm font-bold border-b-2 transition ${isLogin ? 'border-[#ffb300] text-[#ffb300]' : 'border-transparent text-gray-400 hover:text-gray-200'}`}
                 >
                   Sign In
                 </button>
                 <button
                   type="button"
-                  id="tab_signup"
                   onClick={() => { setIsLogin(false); setError(''); }}
-                  className={`flex-1 py-1.5 text-center text-xs font-bold uppercase tracking-wider rounded-lg transition-all cursor-pointer ${
-                    !isLogin 
-                      ? '!bg-[#ffb300] !text-[#2a2e34] shadow-sm' 
-                      : '!bg-transparent !text-[#e9eaec]/60 hover:!text-[#e9eaec]'
-                  }`}
+                  className={`flex-1 py-2 text-sm font-bold border-b-2 transition ${!isLogin ? 'border-[#ffb300] text-[#ffb300]' : 'border-transparent text-gray-400 hover:text-gray-200'}`}
                 >
-                  New Account
+                  Create Account
                 </button>
               </div>
 
               {!isLogin && (
-                <>
-                  <div>
-                    <label className="block text-xs font-semibold !text-[#ffb300] uppercase tracking-wider mb-1">Full Name</label>
-                    <div className="relative">
-                      <UserIcon className="absolute left-3 top-3 w-4 h-4 !text-[#e9eaec]/40 z-10" />
-                      <input
-                        type="text"
-                        required
-                        id="reg_name_input"
-                        placeholder="John Doe"
-                        value={name}
-                        onChange={(e) => setName(e.target.value)}
-                        style={{ paddingLeft: '2.5rem' }}
-                        className="w-full !bg-[#1c1f22] border !border-[#ffb300]/25 rounded-xl py-2.5 !pl-10 pr-4 !text-[#e9eaec] placeholder-[#e9eaec]/30 text-sm focus:outline-none focus:!border-[#ffb300]"
-                      />
-                    </div>
-                  </div>
-
-                  <div className="grid grid-cols-2 gap-3">
-                    <div>
-                      <label className="block text-xs font-semibold !text-[#ffb300] uppercase tracking-wider mb-1">Email ID</label>
-                      <div className="relative">
-                        <Mail className="absolute left-3 top-3 w-4 h-4 !text-[#e9eaec]/40 z-10" />
-                        <input
-                          type="email"
-                          required
-                          id="reg_email_input"
-                          placeholder="john@work.com"
-                          value={email}
-                          onChange={(e) => setEmail(e.target.value)}
-                          style={{ paddingLeft: '2.5rem' }}
-                          className="w-full !bg-[#1c1f22] border !border-[#ffb300]/25 rounded-xl py-2.5 !pl-10 pr-4 !text-[#e9eaec] placeholder-[#e9eaec]/30 text-sm focus:outline-none focus:!border-[#ffb300]"
-                        />
-                      </div>
-                    </div>
-
-                    <div>
-                      <label className="block text-xs font-semibold !text-[#ffb300] uppercase tracking-wider mb-1">Gender</label>
-                      <select
-                        value={gender}
-                        id="reg_gender_select"
-                        onChange={(e: any) => setGender(e.target.value)}
-                        className="w-full !bg-[#1c1f22] border !border-[#ffb300]/25 rounded-xl py-2.5 px-3 !text-[#e9eaec] text-sm focus:outline-none focus:!border-[#ffb300]"
-                      >
-                        <option value="male" className="!bg-[#2a2e34] !text-[#e9eaec]">Male</option>
-                        <option value="female" className="!bg-[#2a2e34] !text-[#e9eaec]">Female</option>
-                        <option value="other" className="!bg-[#2a2e34] !text-[#e9eaec]">Other</option>
-                      </select>
-                    </div>
-                  </div>
-
-                  <div>
-                    <label className="block text-xs font-semibold !text-[#ffb300] uppercase tracking-wider mb-1">Office / College Affiliation</label>
+                <div>
+                  <label className="block text-xs font-bold text-gray-300 uppercase mb-1">Full Name</label>
+                  <div className="relative">
+                    <UserIcon className="w-4 h-4 text-gray-400 absolute left-3 top-3" />
                     <input
                       type="text"
-                      id="reg_org_input"
-                      placeholder="e.g. TechCorp, College"
-                      value={collegeOrCompany}
-                      onChange={(e) => setCollegeOrCompany(e.target.value)}
-                      className="w-full !bg-[#1c1f22] border !border-[#ffb300]/25 rounded-xl py-2.5 px-4 !text-[#e9eaec] placeholder-[#e9eaec]/30 text-sm focus:outline-none focus:!border-[#ffb300]"
+                      required
+                      value={name}
+                      onChange={(e) => setName(e.target.value)}
+                      placeholder="John Doe"
+                      className="w-full pl-9 pr-3 py-2 bg-gray-800 border border-gray-700 rounded-xl text-sm text-white focus:outline-none focus:border-[#ffb300]"
                     />
                   </div>
-                </>
+                </div>
               )}
 
               <div>
-                <label className="block text-xs font-semibold !text-[#ffb300] uppercase tracking-wider mb-1">
-                  {isLogin ? 'Mobile Number or Email' : 'Mobile Number'}
-                </label>
+                <label className="block text-xs font-bold text-gray-300 uppercase mb-1">Email Address</label>
                 <div className="relative">
-                  <Phone className="absolute left-3 top-3 w-4 h-4 !text-[#e9eaec]/40 z-10" />
+                  <Mail className="w-4 h-4 text-gray-400 absolute left-3 top-3" />
                   <input
-                    type="text"
+                    type="email"
                     required
-                    id="auth_contact_input"
-                    placeholder={isLogin ? 'sradha@gmail.com or +919876543210' : '+91 99999 88888'}
-                    value={phone}
-                    onChange={(e) => setPhone(e.target.value)}
-                    style={{ paddingLeft: '2.5rem' }}
-                    className="w-full !bg-[#1c1f22] border !border-[#ffb300]/25 rounded-xl py-2.5 !pl-10 pr-4 !text-[#e9eaec] placeholder-[#e9eaec]/30 text-sm focus:outline-none focus:!border-[#ffb300]"
+                    value={email}
+                    onChange={(e) => setEmail(e.target.value)}
+                    placeholder="you@example.com"
+                    className="w-full pl-9 pr-3 py-2 bg-gray-800 border border-gray-700 rounded-xl text-sm text-white focus:outline-none focus:border-[#ffb300]"
                   />
                 </div>
               </div>
 
-              <button
-                type="submit"
-                id="sumbit_send_otp_btn"
-                disabled={isLoading}
-                className="w-full !bg-[#ffb300] hover:!bg-[#e09d00] !text-[#2a2e34] font-bold py-3 px-4 rounded-xl flex items-center justify-center gap-2 transition-all cursor-pointer font-display border !border-[#2a2e34]/15 shadow-sm"
-              >
-                {isLoading ? <Loader className="w-5 h-5 animate-spin" /> : 'Continue to OTP'}
-                <ArrowRight className="w-4 h-4" />
-              </button>
-            </form>
-          ) : (
-            <form onSubmit={handleVerifyOtp} className="space-y-5">
-              <div className="text-center">
-                <CheckCircle className="w-12 h-12 text-[#ffb300] mx-auto mb-2" />
-                <p className="text-sm font-bold !text-[#e9eaec]">OTP Verification</p>
-                <p className="text-xs !text-[#e9eaec]/60 mt-0.5">Enter code <span className="font-mono font-bold !text-[#ffb300]">123456</span> to continue.</p>
-              </div>
-              <div className="flex gap-2 justify-center">
-                {otp.map((digit, idx) => (
+              <div>
+                <label className="block text-xs font-bold text-gray-300 uppercase mb-1">Password</label>
+                <div className="relative">
+                  <Lock className="w-4 h-4 text-gray-400 absolute left-3 top-3" />
                   <input
-                    key={idx}
-                    id={`otp-${idx}`}
-                    type="text"
-                    maxLength={1}
-                    value={digit}
-                    onChange={(e) => handleOtpChange(idx, e.target.value)}
-                    className="w-12 h-12 text-center text-xl font-bold border !border-[#ffb300]/30 rounded-xl !bg-[#1c1f22] focus:outline-none focus:!border-[#ffb300] !text-[#ffb300] focus:!bg-[#2a2e34]"
+                    type="password"
+                    required
+                    value={password}
+                    onChange={(e) => setPassword(e.target.value)}
+                    placeholder="••••••••"
+                    className="w-full pl-9 pr-3 py-2 bg-gray-800 border border-gray-700 rounded-xl text-sm text-white focus:outline-none focus:border-[#ffb300]"
                   />
-                ))}
+                </div>
               </div>
 
-              <div className="!bg-[#1c1f22] p-3 rounded-xl border !border-[#ffb300]/15 text-center text-xs !text-[#e9eaec]/85">
-                🔑 <strong className="!text-[#e09d00]">Simulator Code:</strong> Enter <span className="font-mono !bg-[#2a2e34] !text-[#ffb300] px-2 py-0.5 rounded-lg font-bold border !border-[#ffb300]/20 mx-1">123456</span>
-              </div>
+              {!isLogin && (
+                <div>
+                  <label className="block text-xs font-bold text-gray-300 uppercase mb-1">Phone Number (Optional)</label>
+                  <div className="relative">
+                    <Phone className="w-4 h-4 text-gray-400 absolute left-3 top-3" />
+                    <input
+                      type="tel"
+                      value={phone}
+                      onChange={(e) => setPhone(e.target.value)}
+                      placeholder="+91 9876543210"
+                      className="w-full pl-9 pr-3 py-2 bg-gray-800 border border-gray-700 rounded-xl text-sm text-white focus:outline-none focus:border-[#ffb300]"
+                    />
+                  </div>
+                </div>
+              )}
 
               <button
                 type="submit"
-                id="submit_verify_otp_btn"
-                className="w-full !bg-[#ffb300] hover:!bg-[#e09d00] !text-[#2a2e34] font-bold py-3 px-4 rounded-xl transition-all cursor-pointer flex items-center justify-center gap-2 font-display border !border-[#2a2e34]/15"
+                disabled={isLoading}
+                className="w-full py-3 bg-[#ffb300] hover:bg-[#ffa000] text-[#2a2e34] font-bold rounded-xl text-sm shadow-lg flex items-center justify-center gap-2 cursor-pointer transition disabled:opacity-50"
               >
-                {isLoading ? <Loader className="w-5 h-5 animate-spin" /> : 'Verify OTP'}
-              </button>
-
-              <button
-                type="button"
-                onClick={() => setStep(1)}
-                className="w-full text-center text-xs font-bold !text-[#e9eaec]/60 hover:!text-[#ffb300] uppercase tracking-wider block transition-colors mt-2 cursor-pointer"
-              >
-                Change Contact
+                {isLoading ? (
+                  <>
+                    <Loader className="w-4 h-4 animate-spin" /> Processing...
+                  </>
+                ) : (
+                  <>
+                    {isLogin ? 'Sign In to MoveBuddy' : 'Create Account'} <ArrowRight className="w-4 h-4" />
+                  </>
+                )}
               </button>
             </form>
           )}
         </div>
-
       </div>
     </div>
   );
 }
-

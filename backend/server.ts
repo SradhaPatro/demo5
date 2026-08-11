@@ -872,6 +872,69 @@ app.post("/api/auth/verify-otp", async (req, res) => {
   return res.json({ success: true, token, refreshToken, user, authMode: result.mode });
 });
 
+// SYNC SUPABASE AUTH USER WITH MOVEBUDDY PRISMA USER
+app.post("/api/auth/sync-supabase-user", async (req, res) => {
+  const { supabaseAuthUserId, email, name, phone, role } = req.body;
+  if (!supabaseAuthUserId || !email) {
+    return res.status(400).json({ error: "Missing required parameters supabaseAuthUserId or email." });
+  }
+
+  let user = db.users.find(u => (u as any).supabaseAuthUserId === supabaseAuthUserId || u.email.toLowerCase() === email.toLowerCase());
+
+  if (user) {
+    (user as any).supabaseAuthUserId = supabaseAuthUserId;
+    (user as any).emailVerified = true;
+    if (name && (!user.name || user.name === email.split('@')[0])) user.name = name;
+    if (phone && !user.phone) user.phone = phone;
+  } else {
+    user = {
+      id: randomUUID(),
+      name: name || email.split('@')[0],
+      email: email.toLowerCase(),
+      phone: phone || "",
+      role: (role === 'host' ? 'host' : 'guest') as any,
+      gender: 'other',
+      avatarUrl: '',
+      buddyScore: 50,
+      rating: 0,
+      reliabilityScore: 50,
+      verificationStatus: 'none',
+      isIdVerified: false,
+      isCompanyVerified: false,
+      createdAt: new Date().toISOString(),
+    } as User;
+    (user as any).supabaseAuthUserId = supabaseAuthUserId;
+    (user as any).emailVerified = true;
+    db.users.push(user);
+  }
+
+  saveDB(db);
+
+  try {
+    await prisma.user.upsert({
+      where: { email: user.email },
+      update: {
+        supabaseAuthUserId: supabaseAuthUserId,
+        emailVerified: true,
+      },
+      create: {
+        id: user.id,
+        supabaseAuthUserId: supabaseAuthUserId,
+        email: user.email,
+        name: user.name,
+        phone: user.phone || "",
+        role: user.role === 'host' ? 'HOST' : 'GUEST',
+        emailVerified: true,
+      }
+    });
+  } catch (err) {
+    logger.error({ err }, "[server] sync-supabase-user Prisma error");
+  }
+
+  const { token, refreshToken } = signTokens(user);
+  res.json({ success: true, token, refreshToken, user });
+});
+
 // REFRESH ACCESS TOKEN — exchange a valid refresh token for a fresh access token.
 // In-memory refresh token blacklist (token rotation / single-use enforcement).
 // NOTE: single-process only — move to Redis in multi-replica deployments.

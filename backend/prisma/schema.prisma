@@ -116,8 +116,10 @@ enum VerificationStatus {
 
 model User {
   id                  String             @id @default(uuid())
+  supabaseAuthUserId  String?            @unique
   name                String
   email               String             @unique
+  emailVerified       Boolean            @default(false)
   phone               String?
   role                UserRole           @default(GUEST)
   gender              Gender             @default(OTHER)
