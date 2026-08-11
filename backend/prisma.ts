@@ -1,4 +1,6 @@
 import { PrismaClient } from "@prisma/client";
+import { PrismaPg } from "@prisma/adapter-pg";
+import { Pool } from "pg";
 
 // In-memory fallback DB storage
 let fallbackDb: any = null;
@@ -377,7 +379,10 @@ let realPrismaClient: any = null;
 
 if (process.env.DATABASE_URL && process.env.DATABASE_URL !== "") {
   try {
-    realPrismaClient = new PrismaClient();
+    // Prisma 7: database connection is passed via adapter, not schema.prisma
+    const pool = new Pool({ connectionString: process.env.DATABASE_URL });
+    const adapter = new PrismaPg(pool);
+    realPrismaClient = new PrismaClient({ adapter } as any);
   } catch (e) {
     console.warn("[AI Studio] Failed to initialize PrismaClient, will use fallback mode:", e);
   }
