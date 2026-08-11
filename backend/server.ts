@@ -52,7 +52,7 @@ import { createClient } from "@supabase/supabase-js";
 import ws from "ws";
 
 const supabaseUrl = process.env.SUPABASE_URL || "https://snrdfprgypioxhskthcm.supabase.co";
-const supabaseAnonKey = process.env.SUPABASE_ANON_KEY || "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.e30.dummy";
+const supabaseAnonKey = process.env.SUPABASE_ANON_KEY || "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InNucmRmcHJneXBpb3hoc2t0aGNtIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODYxNzU3MDcsImV4cCI6MjEwMTc1MTcwN30.OavLMMUDp3XQTuYrf7gsi_-Gy1qG7bMVNzhtV5TNFfE";
 const supabaseAdmin = createClient(supabaseUrl, supabaseAnonKey, {
   auth: { persistSession: false, autoRefreshToken: false },
   realtime: { transport: ws }
