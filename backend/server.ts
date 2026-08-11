@@ -48,6 +48,16 @@ import prisma from "./prisma";
 import { getDistanceKm, geocode, haversineMeters } from "./maps";
 import { tryMatchGuestSub, runMatchSweep } from "./matching";
 import { createPendingSubscription, processActivation, activateSubscriptionAsync } from "./activation";
+import { createClient } from "@supabase/supabase-js";
+import ws from "ws";
+
+const supabaseUrl = process.env.SUPABASE_URL || "https://snrdfprgypioxhskthcm.supabase.co";
+const supabaseAnonKey = process.env.SUPABASE_ANON_KEY || "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.e30.dummy";
+const supabaseAdmin = createClient(supabaseUrl, supabaseAnonKey, {
+  auth: { persistSession: false, autoRefreshToken: false },
+  realtime: { transport: ws }
+});
+
 import { planTypeOf, planDaysOf, weekUnits, workingDaysOf, guestMultiplierOf, guestBaseRoutePrice, guestPlanPrice, guestWelcomeCredit, hostSlab, isFirstGuestSubscription, computePlanAmount } from "./pricing";
 import type { PricingConfig } from "./pricing";
 import {
@@ -1092,12 +1102,14 @@ app.post("/api/rides/offer", rlMiddleware(20, 60000, 120000), async (req, res) =
     genderRestriction
   } = req.body;
 
+  if (!assertSelfOrAdmin(req, res, hostId)) return;
+
   const host = db.users.find(u => u.id === hostId);
   if (!host) {
     return res.status(404).json({ error: "Host profile not found" });
   }
-  if (!host.isIdVerified) {
-    return res.status(403).json({ error: "Host KYC verification required before offering rides." });
+  if (!host.isIdVerified || host.verificationStatus !== 'verified') {
+    return res.status(403).json({ error: "Host verification required: All 5 mandatory documents must be APPROVED before offering rides." });
   }
 
   // Real driving distance via Google Maps Routes API (falls back to an estimate
@@ -2440,7 +2452,7 @@ const MANDATORY_VERIFICATION_DOCS = [
   'PROFILE_PHOTO'
 ];
 
-function calcHostOverallStatus(docs: any[]): 'none' | 'pending' | 'verified' | 'action_required' {
+export function calcHostOverallStatus(docs: any[]): 'none' | 'pending' | 'verified' | 'action_required' {
   if (!docs || docs.length === 0) return 'none';
   const docMap = new Map(docs.map(d => [d.documentType, d]));
   const hasRejection = MANDATORY_VERIFICATION_DOCS.some(t => docMap.get(t)?.status === 'REJECTED');
@@ -2700,6 +2712,26 @@ app.post("/api/admin/verify-document", async (req, res) => {
     document: doc,
     overallStatus
   });
+});
+
+app.get("/api/admin/document-signed-url", async (req, res) => {
+  if (!requireRole(req, res, 'SUPER_ADMIN', 'ADMIN', 'SUPPORT')) return;
+  const storagePath = req.query.storagePath as string;
+  if (!storagePath) return res.status(400).json({ error: "storagePath is required" });
+
+  try {
+    const { data, error } = await supabaseAdmin.storage
+      .from("verification-documents")
+      .createSignedUrl(storagePath, 900); // 15-minute expiry
+
+    if (error || !data?.signedUrl) {
+      return res.status(500).json({ error: error?.message || "Failed to generate signed URL" });
+    }
+
+    res.json({ signedUrl: data.signedUrl, expiresIn: 900 });
+  } catch (err: any) {
+    res.status(500).json({ error: err?.message || "Failed to generate signed URL" });
+  }
 });
 
 // ── RIDE MANAGEMENT ─────────────────────────────────────────────────────────
