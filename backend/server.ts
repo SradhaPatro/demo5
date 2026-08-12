@@ -125,13 +125,52 @@ export { app };
 app.set("trust proxy", 1);
 const PORT = Number(process.env.PORT) || 3000;
 
-const allowedOrigins = process.env.CORS_ORIGINS
+const envOrigins = process.env.CORS_ORIGINS
   ? process.env.CORS_ORIGINS.split(",").map((s) => s.trim())
-  : ["http://localhost:5173", "http://localhost:3000", "http://localhost:4173"];
+  : [];
+
+const isAllowedOrigin = (origin: string | undefined): boolean => {
+  if (!origin) return true; // Allow non-browser/server-to-server requests
+
+  if (envOrigins.includes(origin) || envOrigins.includes("*")) {
+    return true;
+  }
+
+  // Allow all Vercel preview & production deployments (*.vercel.app)
+  if (/\.vercel\.app$/.test(origin)) {
+    return true;
+  }
+
+  // Allow local development origins
+  if (
+    origin.startsWith("http://localhost:") ||
+    origin.startsWith("https://localhost:") ||
+    origin.startsWith("http://127.0.0.1:") ||
+    origin.startsWith("https://127.0.0.1:")
+  ) {
+    return true;
+  }
+
+  if (process.env.NODE_ENV !== "production") {
+    return true;
+  }
+
+  return false;
+};
 
 app.use(cors({
-  origin: process.env.NODE_ENV === "production" ? allowedOrigins : "*",
+  origin: (origin, callback) => {
+    if (isAllowedOrigin(origin)) {
+      // Pass the specific requesting origin back so Access-Control-Allow-Origin is explicitly set
+      callback(null, origin || "*");
+    } else {
+      logger.warn({ origin }, "[CORS] Blocked origin");
+      callback(null, false);
+    }
+  },
   credentials: true,
+  methods: ["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
+  allowedHeaders: ["Content-Type", "Authorization", "X-Requested-With", "Accept"],
 }));
 app.use(requestLogger);
 app.use(express.json({ limit: "25mb" }));
