@@ -28,6 +28,7 @@ import {
   Trip,
 } from "../src/types";
 import { signTokens, verifyAccessToken, verifyRefreshToken, requireAuth, bearerFrom } from "./auth";
+import { handleCalculateDistance } from "./maps";
 import {
   startTrip,
   confirmPickup,
@@ -1082,6 +1083,60 @@ app.post("/api/auth/simulate-verification-state", (req, res) => {
 
   saveDB(db);
   res.json({ success: true, user });
+});
+
+// MAPS & ROUTE DISTANCE API
+app.post("/api/maps/distance", (req, res) => {
+  const { originLat, originLng, destLat, destLng } = req.body;
+  if (originLat === undefined || originLng === undefined || destLat === undefined || destLng === undefined) {
+    return res.status(400).json({ error: "Missing coordinates" });
+  }
+  const result = handleCalculateDistance({ originLat, originLng, destLat, destLng });
+  res.json(result);
+});
+
+// KYC VERIFICATION DOCUMENTS API
+const userVerificationDocs = new Map<string, any[]>();
+
+app.get("/api/verification/my-documents", (req, res) => {
+  const { userId } = req.query;
+  if (!userId || typeof userId !== "string") {
+    return res.status(400).json({ error: "Missing userId query param" });
+  }
+  const user = db.users.find(u => u.id === userId);
+  const docs = userVerificationDocs.get(userId) || [];
+  const overallStatus = user?.verificationStatus || "none";
+  res.json({ success: true, documents: docs, overallStatus });
+});
+
+app.post("/api/verification/upload-document", (req, res) => {
+  const { userId, documentType, storagePath } = req.body;
+  if (!userId || !documentType || !storagePath) {
+    return res.status(400).json({ error: "Missing required fields" });
+  }
+  const user = db.users.find(u => u.id === userId);
+  if (!user) {
+    return res.status(404).json({ error: "User not found" });
+  }
+
+  const existing = userVerificationDocs.get(userId) || [];
+  const docRecord = {
+    id: `doc_${Date.now()}`,
+    userId,
+    documentType,
+    storagePath,
+    status: "PENDING",
+    submittedAt: new Date().toISOString(),
+  };
+
+  const updated = [...existing.filter(d => d.documentType !== documentType), docRecord];
+  userVerificationDocs.set(userId, updated);
+
+  user.verificationStatus = "pending";
+  user.isIdVerified = false;
+  saveDB(db);
+
+  res.json({ success: true, document: docRecord });
 });
 
 // RIDES ENDPOINTS
