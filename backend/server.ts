@@ -27,7 +27,7 @@ import {
   Payment,
   Trip,
 } from "../src/types";
-import { signTokens, verifyRefreshToken, requireAuth, verifySupabaseToken, bearerFrom } from "./auth";
+import { signTokens, verifyAccessToken, verifyRefreshToken, requireAuth, bearerFrom } from "./auth";
 import {
   startTrip,
   confirmPickup,
@@ -897,80 +897,6 @@ app.post("/api/auth/verify-otp", async (req, res) => {
   // Issue real signed JWTs.
   const { token, refreshToken } = signTokens(user);
   return res.json({ success: true, token, refreshToken, user, authMode: result.mode });
-});
-
-// SYNC SUPABASE AUTH USER WITH MOVEBUDDY PRISMA USER
-app.post("/api/auth/sync-supabase-user", async (req, res) => {
-  const token = bearerFrom(req);
-  if (!token) {
-    return res.status(401).json({ error: "Missing Authorization Bearer token" });
-  }
-
-  const authUser = await verifySupabaseToken(token, supabaseAdmin);
-  if (!authUser || !authUser.email) {
-    return res.status(401).json({ error: "Invalid or expired Supabase access token" });
-  }
-
-  const supabaseAuthUserId = authUser.id;
-  const email = authUser.email.toLowerCase();
-  const metaName = authUser.user_metadata?.name || req.body.name;
-  const metaPhone = authUser.user_metadata?.phone || req.body.phone;
-  const metaRole = authUser.user_metadata?.role || req.body.role;
-
-  let user = db.users.find(u => (u as any).supabaseAuthUserId === supabaseAuthUserId || u.email.toLowerCase() === email);
-
-  if (user) {
-    (user as any).supabaseAuthUserId = supabaseAuthUserId;
-    (user as any).emailVerified = true;
-    if (metaName && (!user.name || user.name === email.split('@')[0])) user.name = metaName;
-    if (metaPhone && !user.phone) user.phone = metaPhone;
-  } else {
-    user = {
-      id: randomUUID(),
-      name: metaName || email.split('@')[0],
-      email: email,
-      phone: metaPhone || "",
-      role: (metaRole === 'host' ? 'host' : 'guest') as any,
-      gender: 'other',
-      avatarUrl: '',
-      buddyScore: 50,
-      rating: 0,
-      reliabilityScore: 50,
-      verificationStatus: 'none',
-      isIdVerified: false,
-      isCompanyVerified: false,
-      createdAt: new Date().toISOString(),
-    } as User;
-    (user as any).supabaseAuthUserId = supabaseAuthUserId;
-    (user as any).emailVerified = true;
-    db.users.push(user);
-  }
-
-  saveDB(db);
-
-  try {
-    await prisma.user.upsert({
-      where: { email: user.email },
-      update: {
-        supabaseAuthUserId: supabaseAuthUserId,
-        emailVerified: true,
-      },
-      create: {
-        id: user.id,
-        supabaseAuthUserId: supabaseAuthUserId,
-        email: user.email,
-        name: user.name,
-        phone: user.phone || "",
-        role: user.role === 'host' ? 'HOST' : 'GUEST',
-        emailVerified: true,
-      }
-    });
-  } catch (err) {
-    logger.error({ err }, "[server] sync-supabase-user Prisma error");
-  }
-
-  const { token: appToken, refreshToken } = signTokens(user);
-  res.json({ success: true, token: appToken, refreshToken, user });
 });
 
 // REFRESH ACCESS TOKEN — exchange a valid refresh token for a fresh access token.

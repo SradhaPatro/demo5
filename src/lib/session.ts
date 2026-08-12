@@ -1,5 +1,3 @@
-import { supabase } from './supabaseClient';
-
 const TOKEN_KEY = 'mb_token';
 const REFRESH_KEY = 'mb_refresh';
 
@@ -19,8 +17,4 @@ export function getRefreshToken(): string | null {
 export function clearTokens() {
   localStorage.removeItem(TOKEN_KEY);
   localStorage.removeItem(REFRESH_KEY);
-  // Also sign out from Supabase Auth
-  try {
-    supabase.auth.signOut();
-  } catch { /* ignore */ }
 }

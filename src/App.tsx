@@ -10,8 +10,7 @@ import AdminDashboard from './components/AdminDashboard';
 import SupportModal from './components/SupportModal';
 import ChatModal from './components/ChatModal';
 import AiCompanionWidget from './components/AiCompanionWidget';
-import { clearTokens, setTokens } from './lib/session';
-import { supabase } from './lib/supabaseClient';
+import { clearTokens } from './lib/session';
 
 export default function App() {
   // Session states
@@ -63,49 +62,6 @@ export default function App() {
     const onExpired = () => handleLogout();
     window.addEventListener('mb:session-expired', onExpired);
     return () => window.removeEventListener('mb:session-expired', onExpired);
-  }, []);
-
-  // Listen for Supabase Auth state changes (e.g. Email verification callback redirect)
-  useEffect(() => {
-    const { data: authListener } = supabase.auth.onAuthStateChange(async (event, session) => {
-      if ((event === 'SIGNED_IN' || event === 'INITIAL_SESSION' || event === 'TOKEN_REFRESHED') && session?.user) {
-        try {
-          // Clean hash URL (e.g. remove #access_token=...)
-          if (window.location.hash && window.location.hash.includes('access_token')) {
-            window.history.replaceState(null, '', window.location.pathname);
-          }
-
-          const res = await fetch('/api/auth/sync-supabase-user', {
-            method: 'POST',
-            headers: {
-              'Content-Type': 'application/json',
-              'Authorization': `Bearer ${session.access_token}`
-            },
-            body: JSON.stringify({
-              name: session.user.user_metadata?.name,
-              phone: session.user.user_metadata?.phone,
-              role: session.user.user_metadata?.role
-            })
-          });
-
-          if (res.ok) {
-            const data = await res.json();
-            if (data.success && data.user) {
-              setTokens(data.token, data.refreshToken);
-              setCurrentUser(data.user);
-              localStorage.setItem('movebuddy_user_session', JSON.stringify(data.user));
-              setShowHome(false); // Take user directly to dashboard
-            }
-          }
-        } catch (err) {
-          console.error("Supabase auth listener sync error:", err);
-        }
-      }
-    });
-
-    return () => {
-      authListener?.subscription.unsubscribe();
-    };
   }, []);
 
   // Persist sessions nicely. Restore the cached snapshot for an instant render,

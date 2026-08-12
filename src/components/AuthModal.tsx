@@ -1,8 +1,7 @@
 import React, { useState } from 'react';
 import { User, UserRole } from '../types';
-import { X, Shield, Mail, Lock, User as UserIcon, Phone, CheckCircle, ArrowRight, Loader, RefreshCw } from 'lucide-react';
+import { X, Shield, Mail, User as UserIcon, Phone, ArrowRight, Loader, KeyRound } from 'lucide-react';
 import { setTokens } from '../lib/session';
-import { signUpWithEmail, signInWithEmail, resendVerificationEmail } from '../lib/supabaseClient';
 
 interface AuthModalProps {
   onClose: () => void;
@@ -14,128 +13,120 @@ export default function AuthModal({ onClose, onSuccess, defaultRole = 'guest' }:
   const [isLogin, setIsLogin] = useState(true);
   const [name, setName] = useState('');
   const [email, setEmail] = useState('');
-  const [password, setPassword] = useState('');
   const [phone, setPhone] = useState('');
-  const [gender, setGender] = useState<'male' | 'female' | 'other'>('male');
-  const [collegeOrCompany, setCollegeOrCompany] = useState('');
 
-  // Screen states: 1 = Auth Form, 2 = Check Email Banner, 3 = Email Sent Success
-  const [screen, setScreen] = useState<1 | 2>(1);
+  // Step 1 = Request OTP Form, Step 2 = Enter OTP Form
+  const [step, setStep] = useState<1 | 2>(1);
+  const [otpCode, setOtpCode] = useState('');
+  const [tempUser, setTempUser] = useState<any>(null);
+  const [otpMessage, setOtpMessage] = useState('');
+
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState('');
-  const [resendStatus, setResendStatus] = useState('');
 
-  const syncBackendUser = async (accessToken: string, userName?: string, userPhone?: string, userRole?: string) => {
-    const res = await fetch('/api/auth/sync-supabase-user', {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'Authorization': `Bearer ${accessToken}`
-      },
-      body: JSON.stringify({
-        name: userName,
-        phone: userPhone,
-        role: userRole || defaultRole
-      })
-    });
-    const data = await res.json();
-    if (!res.ok || !data.success) {
-      throw new Error(data.error || 'Failed to synchronize user account');
-    }
-    setTokens(data.token, data.refreshToken);
-    return data.user;
-  };
-
-  const handleAuthSubmit = async (e: React.FormEvent) => {
+  // Step 1: Submit contact details to get OTP
+  const handleRequestOtp = async (e: React.FormEvent) => {
     e.preventDefault();
     setError('');
     setIsLoading(true);
 
-    if (isLogin) {
-      // ── SUPABASE LOGIN FLOW ──
-      if (!email || !password) {
-        setError('Please enter both Email and Password');
-        setIsLoading(false);
-        return;
-      }
-
-      const { user, session, error: loginErr } = await signInWithEmail(email.trim(), password);
-
-      if (loginErr || !user || !session?.access_token) {
-        if (loginErr?.toLowerCase().includes('email not confirmed')) {
-          setScreen(2);
+    try {
+      if (isLogin) {
+        if (!email && !phone) {
+          setError('Please enter your Email Address or Phone Number');
           setIsLoading(false);
           return;
         }
-        setError(loginErr || 'Invalid email or password');
-        setIsLoading(false);
-        return;
-      }
 
-      // Sync verified Supabase user with backend Prisma DB
-      try {
-        const mbUser = await syncBackendUser(session.access_token, name, phone, defaultRole);
-        setIsLoading(false);
-        onSuccess(mbUser);
-      } catch (err: any) {
-        setError(err.message);
-        setIsLoading(false);
-      }
+        const res = await fetch('/api/auth/login', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ phoneOrEmail: email.trim() || phone.trim() }),
+        });
+        const data = await res.json();
 
-    } else {
-      // ── SUPABASE REGISTER FLOW ──
-      if (!name || !email || !password) {
-        setError('Please fill in Name, Email, and Password');
-        setIsLoading(false);
-        return;
-      }
-
-      if (password.length < 6) {
-        setError('Password must be at least 6 characters');
-        setIsLoading(false);
-        return;
-      }
-
-      const { user, session, error: signupErr, requiresEmailConfirmation } = await signUpWithEmail(
-        email.trim(),
-        password,
-        { name, phone, role: defaultRole }
-      );
-
-      if (signupErr) {
-        setError(signupErr);
-        setIsLoading(false);
-        return;
-      }
-
-      if (requiresEmailConfirmation) {
-        setScreen(2); // Show "Check your Email Inbox" screen
-        setIsLoading(false);
-        return;
-      }
-
-      // If instant session granted
-      if (user && session?.access_token) {
-        try {
-          const mbUser = await syncBackendUser(session.access_token, name, phone, defaultRole);
-          setIsLoading(false);
-          onSuccess(mbUser);
-        } catch (err: any) {
-          setError(err.message);
-          setIsLoading(false);
+        if (!res.ok) {
+          throw new Error(data.error || 'Failed to send OTP');
         }
+
+        if (data.isNew) {
+          setIsLogin(false);
+          setError('Account not found. Please fill in your details to create an account.');
+          setIsLoading(false);
+          return;
+        }
+
+        setTempUser(data.user);
+        setOtpMessage(data.message || 'OTP sent! Use code 123456 in dev mode.');
+        setStep(2);
+      } else {
+        if (!name || !email || !phone) {
+          setError('Please fill in Name, Email, and Phone Number');
+          setIsLoading(false);
+          return;
+        }
+
+        const res = await fetch('/api/auth/register', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            name: name.trim(),
+            email: email.trim(),
+            phone: phone.trim(),
+            role: defaultRole,
+          }),
+        });
+        const data = await res.json();
+
+        if (!res.ok) {
+          throw new Error(data.error || 'Registration failed');
+        }
+
+        setTempUser(data.user);
+        setOtpMessage(data.message || 'OTP sent! Use code 123456 in dev mode.');
+        setStep(2);
       }
+    } catch (err: any) {
+      setError(err.message || 'Failed to process request');
+    } finally {
+      setIsLoading(false);
     }
   };
 
-  const handleResendEmail = async () => {
-    if (!email) return;
-    setResendStatus('Sending verification email...');
-    const { error: resendErr } = await resendVerificationEmail(email.trim());
-    if (resendErr) {
-      setResendStatus(`Failed: ${resendErr}`);
-    } else {
-      setResendStatus('✅ Verification email sent! Please check your inbox.');
+  // Step 2: Verify OTP
+  const handleVerifyOtp = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setError('');
+    setIsLoading(true);
+
+    try {
+      if (!otpCode || otpCode.trim().length === 0) {
+        setError('Please enter the 6-digit OTP code');
+        setIsLoading(false);
+        return;
+      }
+
+      const res = await fetch('/api/auth/verify-otp', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          userId: tempUser?.id,
+          code: otpCode.trim(),
+        }),
+      });
+      const data = await res.json();
+
+      if (!res.ok || !data.success) {
+        throw new Error(data.error || 'Invalid OTP code. Please use 123456.');
+      }
+
+      setTokens(data.token, data.refreshToken);
+      localStorage.setItem('movebuddy_user_session', JSON.stringify(data.user));
+      onSuccess(data.user);
+    } catch (err: any) {
+      setError(err.message || 'OTP verification failed');
+    } finally {
+      setIsLoading(false);
     }
   };
 
@@ -167,47 +158,62 @@ export default function AuthModal({ onClose, onSuccess, defaultRole = 'guest' }:
             </div>
           )}
 
-          {screen === 2 ? (
-            /* EMAIL VERIFICATION REQUIRED SCREEN */
-            <div className="space-y-5 text-center py-4">
-              <div className="w-16 h-16 bg-[#ffb300]/20 rounded-full flex items-center justify-center mx-auto text-[#ffb300]">
-                <Mail className="w-8 h-8" />
+          {step === 2 ? (
+            /* STEP 2: VERIFY OTP FORM */
+            <form onSubmit={handleVerifyOtp} className="space-y-5">
+              <div className="text-center space-y-2 py-2">
+                <div className="w-14 h-14 bg-[#ffb300]/20 rounded-full flex items-center justify-center mx-auto text-[#ffb300]">
+                  <KeyRound className="w-7 h-7" />
+                </div>
+                <h3 className="text-lg font-bold text-white">Enter OTP Code</h3>
+                <p className="text-xs text-gray-300">
+                  {otpMessage || 'OTP sent to your phone/email.'}
+                </p>
+                <div className="inline-block bg-[#ffb300]/10 border border-[#ffb300]/30 rounded-lg px-3 py-1.5 text-xs text-[#ffb300] font-mono">
+                  Development OTP: <strong>123456</strong>
+                </div>
               </div>
 
               <div>
-                <h3 className="text-xl font-bold text-white">Check Your Email Inbox 📬</h3>
-                <p className="text-sm text-gray-300 mt-2">
-                  We sent a real verification link to <strong className="text-[#ffb300]">{email}</strong>.
-                </p>
-                <p className="text-xs text-gray-400 mt-1">
-                  Please click the link inside your email to verify your MoveBuddy account.
-                </p>
+                <label className="block text-xs font-bold text-gray-300 uppercase mb-1">6-Digit OTP</label>
+                <input
+                  type="text"
+                  required
+                  maxLength={6}
+                  value={otpCode}
+                  onChange={(e) => setOtpCode(e.target.value)}
+                  placeholder="123456"
+                  className="w-full text-center text-xl tracking-widest font-mono py-3 bg-gray-800 border border-gray-700 rounded-xl text-white focus:outline-none focus:border-[#ffb300]"
+                />
               </div>
 
-              <div className="pt-3 border-t border-gray-700 space-y-3">
-                {resendStatus && (
-                  <p className="text-xs font-semibold text-[#ffb300]">{resendStatus}</p>
+              <button
+                type="submit"
+                disabled={isLoading}
+                className="w-full py-3 bg-[#ffb300] hover:bg-[#ffa000] text-[#2a2e34] font-bold rounded-xl text-sm shadow-lg flex items-center justify-center gap-2 cursor-pointer transition disabled:opacity-50"
+              >
+                {isLoading ? (
+                  <>
+                    <Loader className="w-4 h-4 animate-spin" /> Verifying...
+                  </>
+                ) : (
+                  <>
+                    Verify OTP & Sign In <ArrowRight className="w-4 h-4" />
+                  </>
                 )}
-                <button
-                  type="button"
-                  onClick={handleResendEmail}
-                  className="w-full py-2.5 px-4 bg-gray-700 hover:bg-gray-600 text-white rounded-xl text-sm font-semibold flex items-center justify-center gap-2 cursor-pointer transition"
-                >
-                  <RefreshCw className="w-4 h-4" /> Resend Verification Email
-                </button>
+              </button>
 
-                <button
-                  type="button"
-                  onClick={() => { setScreen(1); setIsLogin(true); }}
-                  className="text-xs text-[#ffb300] hover:underline"
-                >
-                  Already verified? Log in here
-                </button>
-              </div>
-            </div>
+              <button
+                type="button"
+                onClick={() => setStep(1)}
+                className="w-full text-xs text-gray-400 hover:text-gray-200 text-center"
+              >
+                ← Back to contact details
+              </button>
+            </form>
           ) : (
-            /* LOGIN / REGISTER FORM SCREEN */
-            <form onSubmit={handleAuthSubmit} className="space-y-4">
+            /* STEP 1: CONTACT DETAILS FORM */
+            <form onSubmit={handleRequestOtp} className="space-y-4">
               <div className="flex border-b border-gray-700 mb-4">
                 <button
                   type="button"
@@ -258,35 +264,21 @@ export default function AuthModal({ onClose, onSuccess, defaultRole = 'guest' }:
               </div>
 
               <div>
-                <label className="block text-xs font-bold text-gray-300 uppercase mb-1">Password</label>
+                <label className="block text-xs font-bold text-gray-300 uppercase mb-1">
+                  Phone Number {!isLogin ? '' : '(Optional)'}
+                </label>
                 <div className="relative">
-                  <Lock className="w-4 h-4 text-gray-400 absolute left-3 top-3" />
+                  <Phone className="w-4 h-4 text-gray-400 absolute left-3 top-3" />
                   <input
-                    type="password"
-                    required
-                    value={password}
-                    onChange={(e) => setPassword(e.target.value)}
-                    placeholder="••••••••"
+                    type="tel"
+                    required={!isLogin}
+                    value={phone}
+                    onChange={(e) => setPhone(e.target.value)}
+                    placeholder="+91 9876543210"
                     className="w-full pl-9 pr-3 py-2 bg-gray-800 border border-gray-700 rounded-xl text-sm text-white focus:outline-none focus:border-[#ffb300]"
                   />
                 </div>
               </div>
-
-              {!isLogin && (
-                <div>
-                  <label className="block text-xs font-bold text-gray-300 uppercase mb-1">Phone Number (Optional)</label>
-                  <div className="relative">
-                    <Phone className="w-4 h-4 text-gray-400 absolute left-3 top-3" />
-                    <input
-                      type="tel"
-                      value={phone}
-                      onChange={(e) => setPhone(e.target.value)}
-                      placeholder="+91 9876543210"
-                      className="w-full pl-9 pr-3 py-2 bg-gray-800 border border-gray-700 rounded-xl text-sm text-white focus:outline-none focus:border-[#ffb300]"
-                    />
-                  </div>
-                </div>
-              )}
 
               <button
                 type="submit"
@@ -295,11 +287,11 @@ export default function AuthModal({ onClose, onSuccess, defaultRole = 'guest' }:
               >
                 {isLoading ? (
                   <>
-                    <Loader className="w-4 h-4 animate-spin" /> Processing...
+                    <Loader className="w-4 h-4 animate-spin" /> Requesting OTP...
                   </>
                 ) : (
                   <>
-                    {isLogin ? 'Sign In to MoveBuddy' : 'Create Account'} <ArrowRight className="w-4 h-4" />
+                    {isLogin ? 'Request OTP' : 'Send Registration OTP'} <ArrowRight className="w-4 h-4" />
                   </>
                 )}
               </button>

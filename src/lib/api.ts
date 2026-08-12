@@ -11,7 +11,7 @@ const API_BASE = (import.meta.env.VITE_API_URL as string | undefined) || '';
 const origFetch = window.fetch.bind(window);
 
 // Auth endpoints must NOT carry/refresh a Bearer token themselves.
-const AUTH_EXEMPT = /\/api\/auth\/(login|register|verify-otp|refresh|sync-supabase-user)\b/;
+const AUTH_EXEMPT = /\/api\/auth\/(login|register|verify-otp|refresh)\b/;
 
 function urlOf(input: RequestInfo | URL): string {
   if (typeof input === 'string') return input;
