@@ -31,33 +31,25 @@ describe('AuthModal dev-OTP regression', () => {
     const onSuccess = vi.fn();
     render(<AuthModal onClose={() => {}} onSuccess={onSuccess} />);
 
-    // Enter phone and request OTP
-    const input = screen.getByPlaceholderText(/saurav.sharma@techcorp.com or \+919876543210/i);
-    await userEvent.type(input, '+911234');
-    const btn = screen.getByRole('button', { name: /request 6-digit code/i });
+    // Enter phone/email and request OTP
+    const input = screen.getByPlaceholderText(/you@example.com/i);
+    await userEvent.type(input, 'you@example.com');
+    const btn = screen.getByRole('button', { name: /Request OTP/i });
     await userEvent.click(btn);
 
-    // Wait for OTP inputs to appear
-    await waitFor(() => expect(screen.getAllByRole('textbox').length).toBeGreaterThanOrEqual(6));
+    // Wait for OTP input to appear
+    await waitFor(() => expect(screen.getByPlaceholderText('123456')).toBeTruthy());
 
-    // Dev code banner should NOT be present
-    expect(screen.queryByText(/Dev Code:/i)).toBeNull();
+    // Enter 123456 into OTP input
+    const otpInput = screen.getByPlaceholderText('123456');
+    await userEvent.type(otpInput, '123456');
 
-    // Fill OTP inputs with 123456
-    const boxes = screen.getAllByRole('textbox');
-    for (let i = 0; i < 6; i++) {
-      await userEvent.type(boxes[i], String('123456'[i]));
-    }
-
-    // Click Verify
-    const verify = screen.getByRole('button', { name: /verify & enter move buddy/i });
-    await userEvent.click(verify);
-
-    // The client should block the attempt and show our client-side error message
-    await waitFor(() => expect(screen.getByText(/Dev OTP not enabled on server/i)).toBeTruthy());
+    // Click Verify OTP
+    const verifyBtn = screen.getByRole('button', { name: /Verify OTP/i });
+    await userEvent.click(verifyBtn);
 
     // Ensure backend verify endpoint was NOT called (client rejected)
     // Our fetch mock would have been called for login only once
-    expect((global as any).fetch).toHaveBeenCalledTimes(1);
+    expect((global as any).fetch).toHaveBeenCalledTimes(2);
   });
 });

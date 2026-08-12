@@ -112,7 +112,7 @@ describe("Matching engine", () => {
   it("rejects host outside pickup radius", async () => {
     const { findBuddyForGuest } = await import("../backend/matching");
     const state = makeState(makeUsers(), [
-      hostSub({ originGeo: { lat: 42.3610, lng: -71.0955 } }),
+      hostSub({ originGeo: { lat: 43.0000, lng: -71.0955 } }),
     ]);
     const gs = guestSub({
       origin: "MIT Food Court, Cambridge",

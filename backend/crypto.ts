@@ -49,8 +49,8 @@ export function decryptPii(ciphertext: string | null | undefined): string | null
       decrypted += decipher.final("utf8");
       return decrypted;
     } catch {
-      return ciphertext;
+      return null;
     }
   }
-  return ciphertext;
+  return null;
 }

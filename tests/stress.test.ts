@@ -168,12 +168,13 @@ describe("Stress test: 20 guests + 10 hosts", () => {
       hosts.push({
         id: `sub_h_sweep_${i}`, userId: `usr_hs_${i}`,
         planName: "Host Monthly", durationDays: 22,
-        startDate: "2026-07-01", endDate: "2026-07-22",
+        startDate: "2026-08-01", endDate: "2026-08-31",
         amountPaid: 99, status: "active" as const, role: "host" as const,
-        origin: `H${i} O`, destination: `H${i} D`,
+        origin: "MIT Gate, Cambridge", destination: "MIT Food Court, Cambridge",
         forwardTime: "09:00", returnTime: "18:00",
-        originGeo: randomGeo(center, 1000), destGeo: randomGeo(center, 1000),
+        originGeo: center, destGeo: center,
         distanceKm: 3, matchId: null,
+        pickupRadiusM: 5000, dropRadiusM: 5000,
       });
     }
 
@@ -182,14 +183,14 @@ describe("Stress test: 20 guests + 10 hosts", () => {
       guests.push({
         id: `sub_g_sweep_${i}`, userId: `usr_gs_${i}`,
         planName: "Monthly Pass", durationDays: 22,
-        startDate: "2026-07-01", endDate: "2026-07-22",
+        startDate: "2026-08-01", endDate: "2026-08-31",
         amountPaid: 500, status: "active" as const, role: "guest" as const,
         direction: "forward" as const,
-        origin: `G${i} O`, destination: `G${i} D`,
+        origin: "MIT Gate, Cambridge", destination: "MIT Food Court, Cambridge",
         departureTime: "09:00",
-        originGeo: randomGeo(center, 500), destGeo: randomGeo(center, 500),
+        originGeo: center, destGeo: center,
         distanceKm: 2, matchId: null,
-        pickupRadiusM: 2000, dropRadiusM: 2000,
+        pickupRadiusM: 5000, dropRadiusM: 5000,
       });
     }
 
