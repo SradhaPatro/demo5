@@ -129,49 +129,37 @@ const envOrigins = process.env.CORS_ORIGINS
   ? process.env.CORS_ORIGINS.split(",").map((s) => s.trim())
   : [];
 
-const isAllowedOrigin = (origin: string | undefined): boolean => {
-  if (!origin) return true; // Allow non-browser/server-to-server requests
+app.use((req: express.Request, res: express.Response, next: express.NextFunction) => {
+  const origin = req.headers.origin;
 
-  if (envOrigins.includes(origin) || envOrigins.includes("*")) {
-    return true;
-  }
+  if (origin) {
+    const isAllowed =
+      envOrigins.includes(origin) ||
+      envOrigins.includes("*") ||
+      /\.vercel\.app$/.test(origin) ||
+      origin.startsWith("http://localhost:") ||
+      origin.startsWith("https://localhost:") ||
+      origin.startsWith("http://127.0.0.1:") ||
+      origin.startsWith("https://127.0.0.1:") ||
+      process.env.NODE_ENV !== "production";
 
-  // Allow all Vercel preview & production deployments (*.vercel.app)
-  if (/\.vercel\.app$/.test(origin)) {
-    return true;
-  }
-
-  // Allow local development origins
-  if (
-    origin.startsWith("http://localhost:") ||
-    origin.startsWith("https://localhost:") ||
-    origin.startsWith("http://127.0.0.1:") ||
-    origin.startsWith("https://127.0.0.1:")
-  ) {
-    return true;
-  }
-
-  if (process.env.NODE_ENV !== "production") {
-    return true;
-  }
-
-  return false;
-};
-
-app.use(cors({
-  origin: (origin, callback) => {
-    if (isAllowedOrigin(origin)) {
-      // Pass the specific requesting origin back so Access-Control-Allow-Origin is explicitly set
-      callback(null, origin || "*");
+    if (isAllowed) {
+      res.setHeader("Access-Control-Allow-Origin", origin);
+      res.setHeader("Access-Control-Allow-Credentials", "true");
+      res.setHeader("Access-Control-Allow-Methods", "GET, POST, PUT, PATCH, DELETE, OPTIONS");
+      res.setHeader("Access-Control-Allow-Headers", "Content-Type, Authorization, X-Requested-With, Accept");
     } else {
       logger.warn({ origin }, "[CORS] Blocked origin");
-      callback(null, false);
     }
-  },
-  credentials: true,
-  methods: ["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
-  allowedHeaders: ["Content-Type", "Authorization", "X-Requested-With", "Accept"],
-}));
+  }
+
+  // Intercept and resolve preflight OPTIONS requests immediately
+  if (req.method === "OPTIONS") {
+    return res.sendStatus(204);
+  }
+
+  next();
+});
 app.use(requestLogger);
 app.use(express.json({ limit: "25mb" }));
 
