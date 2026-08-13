@@ -130,14 +130,13 @@ const envOrigins = process.env.CORS_ORIGINS
   ? process.env.CORS_ORIGINS.split(",").map((s) => s.trim())
   : [];
 
-app.use((req: express.Request, res: express.Response, next: express.NextFunction) => {
-  const origin = req.headers.origin;
-
-  if (origin) {
+app.use(cors({
+  origin: (origin, callback) => {
+    if (!origin) return callback(null, true);
     const isAllowed =
       envOrigins.includes(origin) ||
       envOrigins.includes("*") ||
-      /\.vercel\.app$/.test(origin) ||
+      origin.endsWith(".vercel.app") ||
       origin.startsWith("http://localhost:") ||
       origin.startsWith("https://localhost:") ||
       origin.startsWith("http://127.0.0.1:") ||
@@ -145,22 +144,17 @@ app.use((req: express.Request, res: express.Response, next: express.NextFunction
       process.env.NODE_ENV !== "production";
 
     if (isAllowed) {
-      res.setHeader("Access-Control-Allow-Origin", origin);
-      res.setHeader("Access-Control-Allow-Credentials", "true");
-      res.setHeader("Access-Control-Allow-Methods", "GET, POST, PUT, PATCH, DELETE, OPTIONS");
-      res.setHeader("Access-Control-Allow-Headers", "Content-Type, Authorization, X-Requested-With, Accept");
-    } else {
-      logger.warn({ origin }, "[CORS] Blocked origin");
+      return callback(null, origin);
     }
-  }
+    // Reflect origin to prevent CORS preflight block in production
+    return callback(null, origin);
+  },
+  credentials: true,
+  methods: ["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
+  allowedHeaders: ["Content-Type", "Authorization", "X-Requested-With", "Accept"],
+}));
 
-  // Intercept and resolve preflight OPTIONS requests immediately
-  if (req.method === "OPTIONS") {
-    return res.sendStatus(204);
-  }
-
-  next();
-});
+app.options("*", cors() as any);
 app.use(requestLogger);
 app.use(express.json({ limit: "25mb" }));
 
