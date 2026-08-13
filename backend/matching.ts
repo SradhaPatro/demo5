@@ -68,22 +68,7 @@ async function endpointMeters(
     }
     return meters;
   }
-  if (aAddr && bAddr) {
-    const getDistanceStart = Date.now();
-    const r = await getDistanceKm(aAddr, bAddr);
-    const getDistanceMs = Date.now() - getDistanceStart;
-    if (getDistanceMs > 2000) {
-      console.log("ACT_TIMING: getDistanceKm slow", { aAddr, bAddr, ms: getDistanceMs, source: r.source });
-    }
-    if (r.source === "ors" || r.source === "haversine" || r.source === "estimate") {
-      if (r.km > MAX_REASONABLE_KM) return null;
-      const ms = Date.now() - endpointMetersStart;
-      if (ms > 2000) {
-        console.log("ACT_TIMING: endpointMeters slow", { aAddr, bAddr, ms });
-      }
-      return Math.round(r.km * 1000);
-    }
-  }
+  return null;
   const ms = Date.now() - endpointMetersStart;
   if (ms > 2000) {
     console.log("ACT_TIMING: endpointMeters slow", { aAddr, bAddr, ms });

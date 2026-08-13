@@ -6,7 +6,8 @@ import {
   Menu, X, TrendingUp, Package, Upload, Megaphone,
   CheckCircle, XCircle, RefreshCw, Plus, Trash2, CreditCard,
   Edit3, Save, Send, AlertTriangle,
-  UserCheck, Search, Star, Award, Lock, Gift
+  UserCheck, Search, Star, Award, Lock, Gift,
+  Loader, Clock, Eye, FileCheck
 } from 'lucide-react';
 import { User, AdminRole } from '../types';
 

@@ -17,6 +17,17 @@ interface CheckoutParams {
   subDetails: Record<string, unknown>;
 }
 
+function loadRazorpaySdk(): Promise<boolean> {
+  return new Promise((resolve) => {
+    if ((window as any).Razorpay) return resolve(true);
+    const script = document.createElement('script');
+    script.src = 'https://checkout.razorpay.com/v1/checkout.js';
+    script.onload = () => resolve(true);
+    script.onerror = () => resolve(false);
+    document.body.appendChild(script);
+  });
+}
+
 async function verify(orderId: string, paymentId: string, signature: string, params: CheckoutParams): Promise<CheckoutResult> {
   const ctrl = new AbortController();
   const timer = setTimeout(() => ctrl.abort(), 30000);
@@ -43,8 +54,71 @@ async function verify(orderId: string, paymentId: string, signature: string, par
 }
 
 export async function startCheckout(params: CheckoutParams): Promise<CheckoutResult> {
-  const uniqueId = Math.random().toString(36).substring(2, 9) + Date.now().toString(36);
-  const devOrderId = `order_dev_${uniqueId}`;
-  const devPaymentId = `pay_dev_${uniqueId}`;
-  return verify(devOrderId, devPaymentId, 'dev', params);
+  try {
+    // 1. Create order on MoveBuddy backend
+    const res = await fetch('/api/payments/create-order', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        planName: params.planName,
+        role: params.role,
+        distanceKm: params.distanceKm || 0,
+      }),
+    });
+
+    const data = await res.json().catch(() => ({}));
+
+    if (!res.ok || !data.orderId) {
+      return { success: false, error: data.error || 'Could not initiate payment order.' };
+    }
+
+    // 2. If backend is in devMode or no Key ID returned, bypass Razorpay UI
+    if (data.devMode || !data.keyId) {
+      const devPaymentId = `pay_dev_${Date.now()}`;
+      return verify(data.orderId, devPaymentId, 'dev', params);
+    }
+
+    // 3. Load Razorpay Checkout SDK
+    const sdkLoaded = await loadRazorpaySdk();
+    if (!sdkLoaded) {
+      return { success: false, error: 'Failed to load Razorpay SDK. Check network connection.' };
+    }
+
+    // 4. Open Razorpay Modal Window
+    return new Promise((resolve) => {
+      const options = {
+        key: data.keyId,
+        amount: Math.round((data.amount || 0) * 100),
+        currency: data.currency || 'INR',
+        name: 'MoveBuddy Commute',
+        description: `${params.role.toUpperCase()} - ${params.planName}`,
+        order_id: data.orderId,
+        prefill: {
+          name: data.userName || '',
+          email: data.userEmail || '',
+          contact: data.userPhone || '',
+        },
+        theme: { color: '#F59E0B' },
+        handler: async function (response: any) {
+          const result = await verify(
+            response.razorpay_order_id,
+            response.razorpay_payment_id,
+            response.razorpay_signature,
+            params
+          );
+          resolve(result);
+        },
+        modal: {
+          ondismiss: function () {
+            resolve({ success: false, error: 'Payment popup closed by user.' });
+          },
+        },
+      };
+
+      const rzp = new (window as any).Razorpay(options);
+      rzp.open();
+    });
+  } catch (err: any) {
+    return { success: false, error: err?.message || 'Checkout initiation failed.' };
+  }
 }

@@ -106,13 +106,30 @@ export async function searchLocations(query: string): Promise<LocationSearchResu
 
   // OpenStreetMap Nominatim Free Fallback
   try {
-    const osmUrl = `https://nominatim.openstreetmap.org/search?format=json&q=${encodeURIComponent(
-      query
-    )}&limit=5`;
-    const res = await fetch(osmUrl, {
-      headers: { "User-Agent": "MoveBuddy-CommuteApp/1.0" },
-    });
-    const data = await res.json();
+    const cleanQuery = query.toLowerCase().includes("bengaluru") || query.toLowerCase().includes("bangalore") 
+      ? query 
+      : `${query}, Bengaluru`;
+
+    // Try primary search with countrycode restriction & Bengaluru viewbox (bounding box)
+    const fetchOsm = async (qStr: string) => {
+      const osmUrl = `https://nominatim.openstreetmap.org/search?format=json&q=${encodeURIComponent(
+        qStr
+      )}&countrycodes=in&viewbox=77.35,13.15,77.85,12.75&limit=5`;
+      const res = await fetch(osmUrl, {
+        headers: { "User-Agent": "MoveBuddy-CommuteApp/1.0" },
+      });
+      return await res.json();
+    };
+
+    let data = await fetchOsm(cleanQuery);
+
+    // If full address search (e.g., door no, cross road) yielded 0 results, retry with broader locality part
+    if ((!Array.isArray(data) || data.length === 0) && cleanQuery.includes(",")) {
+      const parts = cleanQuery.split(",").map(p => p.trim()).filter(Boolean);
+      // Try last 2-3 tokens (e.g. "gurumurthy reddy layout, 560016, bengaluru")
+      const fallbackQuery = parts.slice(Math.max(1, parts.length - 3)).join(", ");
+      data = await fetchOsm(fallbackQuery);
+    }
 
     if (Array.isArray(data) && data.length > 0) {
       return data.map((item: any) => ({

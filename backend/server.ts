@@ -46,7 +46,7 @@ import { verifyOtp, devOtpActive } from "./otp";
 import { initDb, loadState, saveState, persistNow, wipeAllData, persistTrip, persistWalletForUser, persistSubscription, persistMatch, persistUser } from "./db";
 import { encryptPii, decryptPii } from "./crypto";
 import prisma from "./prisma";
-import { getDistanceKm, geocode, haversineMeters } from "./maps";
+import { getDistanceKm, geocode, haversineMeters, calculateHaversineDistance } from "./maps";
 import { tryMatchGuestSub, runMatchSweep } from "./matching";
 import { createPendingSubscription, processActivation, activateSubscriptionAsync } from "./activation";
 import { createClient } from "@supabase/supabase-js";
@@ -56,7 +56,7 @@ const supabaseUrl = process.env.SUPABASE_URL || "https://snrdfprgypioxhskthcm.su
 const supabaseAnonKey = process.env.SUPABASE_ANON_KEY || "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InNucmRmcHJneXBpb3hoc2t0aGNtIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODYxNzU3MDcsImV4cCI6MjEwMTc1MTcwN30.OavLMMUDp3XQTuYrf7gsi_-Gy1qG7bMVNzhtV5TNFfE";
 const supabaseAdmin = createClient(supabaseUrl, supabaseAnonKey, {
   auth: { persistSession: false, autoRefreshToken: false },
-  realtime: { transport: ws }
+  realtime: { transport: ws as any }
 });
 
 import { planTypeOf, planDaysOf, weekUnits, workingDaysOf, guestMultiplierOf, guestBaseRoutePrice, guestPlanPrice, guestWelcomeCredit, hostSlab, isFirstGuestSubscription, computePlanAmount } from "./pricing";
@@ -233,14 +233,31 @@ function getGeminiClient(): GoogleGenAI | null {
   });
 }
 
-function getRazorpay(): null {
+import Razorpay from "razorpay";
+
+let rzpClientInstance: any = null;
+function getRazorpay(): any {
+  if (rzpClientInstance) return rzpClientInstance;
+  const keyId = process.env.RAZORPAY_KEY_ID;
+  const keySecret = process.env.RAZORPAY_KEY_SECRET;
+  if (keyId && keySecret && !keyId.includes("example") && !keySecret.includes("example")) {
+    try {
+      rzpClientInstance = new Razorpay({ key_id: keyId, key_secret: keySecret });
+      return rzpClientInstance;
+    } catch (e: any) {
+      logger.error({ err: e }, "[razorpay] Initialization failed");
+      return null;
+    }
+  }
   return null;
 }
 function razorpayConfigured(): boolean {
-  return false;
+  return !!getRazorpay();
 }
 function paymentsDevBypass(): boolean {
-  return true;
+  if (process.env.PAYMENTS_DEV_BYPASS === "true") return true;
+  if (process.env.PAYMENTS_DEV_BYPASS === "false") return false;
+  return !razorpayConfigured();
 }
 
 
@@ -406,6 +423,8 @@ interface DatabaseState {
   vouchers: Voucher[];
   trips: Trip[];
   tripValidationConfig: ValidationConfig;
+  verificationDocuments?: any[];
+  verificationHistories?: any[];
 }
 
 // Seed Initial Mock Data for a delightful out-of-the-box experience
@@ -417,6 +436,8 @@ const defaultState: DatabaseState = {
   wallets: {},
   chatMessages: [],
   tickets: [],
+  verificationDocuments: [],
+  verificationHistories: [],
   systemSettings: {
     logoUrl: "https://images.unsplash.com/photo-1549611016-3a70d82b5040?auto=format&fit=crop&w=150&q=80",
     bannerText: "â˜” Monsoon Special: Get extra 10% cashbacks on recurring campus commute passes!",
@@ -1194,9 +1215,12 @@ app.post("/api/rides/offer", rlMiddleware(20, 60000, 120000), async (req, res) =
     return res.status(403).json({ error: "Host verification required: All 5 mandatory documents must be APPROVED before offering rides." });
   }
 
-  // Real driving distance via Google Maps Routes API (falls back to an estimate
-  // if Maps is unreachable â€” flagged via distanceSource on the response).
-  const { km: dist, durationMin, source: distanceSource } = await getDistanceKm(origin, destination);
+  // Real driving distance via geocode + Haversine fallback
+  const g1 = await geocode(origin);
+  const g2 = await geocode(destination);
+  const dist = g1 && g2 ? calculateHaversineDistance(g1.lat, g1.lng, g2.lat, g2.lng) : 10;
+  const durationMin = Math.max(5, Math.round((dist / 25) * 60));
+  const distanceSource = "haversine";
   const rate = vehicleType === "car" ? 8 : 4;
 
   const newRide: Ride = {
@@ -1746,8 +1770,11 @@ app.post("/api/distance", rlMiddleware(30, 60000, 120000), async (req, res) => {
   // 2) Addresses â†’ Google Routes (real driving distance) OR its built-in estimate
   //    fallback. ALWAYS returns a km so the subscribe flow is never blocked.
   if (origin && destination) {
-    const r = await getDistanceKm(origin, destination);
-    return res.json({ km: r.km, durationMin: r.durationMin, source: r.source, fallbackReason: r.fallbackReason });
+    const g1 = await geocode(origin);
+    const g2 = await geocode(destination);
+    const km = g1 && g2 ? calculateHaversineDistance(g1.lat, g1.lng, g2.lat, g2.lng) : 10;
+    const durationMin = Math.max(5, Math.round((km / 25) * 60));
+    return res.json({ km, durationMin, source: "haversine", fallbackReason: null });
   }
   return res.status(400).json({ error: "Provide origin/destination addresses or coordinates" });
 });
@@ -2717,7 +2744,8 @@ app.post("/api/admin/verify-document", async (req, res) => {
   const docIdx = db.verificationDocuments.findIndex((d: any) => d.id === documentId);
   if (docIdx === -1) return res.status(404).json({ error: "Document not found" });
 
-  const reviewerId = req.auth?.sub || 'admin';
+  const tokenUser = bearerFrom(req) ? verifyAccessToken(bearerFrom(req)!) : null;
+  const reviewerId = (req as any).auth?.sub || tokenUser?.sub || 'admin';
   const now = new Date();
 
   db.verificationDocuments[docIdx] = {

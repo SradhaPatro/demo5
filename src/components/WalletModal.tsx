@@ -41,63 +41,96 @@ export default function WalletModal({
         body: JSON.stringify({ amount: amt }),
       });
       const order = await coRes.json().catch(() => ({}));
-      
-      const vRes = await fetch('/api/wallet/topup-verify', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          orderId: order.orderId || ('ord_' + Date.now()),
-          paymentId: 'pay_dev_' + Date.now(),
-          signature: 'dev',
-        }),
-      });
-      const vData = await vRes.json().catch(() => ({}));
-      if (vRes.ok && vData.success) {
-        setMsg(`Success! ₹${amt} added to your MoveBuddy wallet.`);
-        onRefreshWallet();
-      } else {
-        setErr(vData.error || 'Failed to update wallet.');
+      if (!coRes.ok || !order.orderId) {
+        setErr(order.error || 'Failed to create topup order.');
+        setProcessing(false);
+        return;
       }
+
+      if (order.devMode || !order.keyId) {
+        // Dev fallback
+        const vRes = await fetch('/api/wallet/topup-verify', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            orderId: order.orderId,
+            paymentId: 'pay_dev_' + Date.now(),
+            signature: 'dev',
+          }),
+        });
+        const vData = await vRes.json().catch(() => ({}));
+        if (vRes.ok && vData.success) {
+          setMsg(`Success! ₹${amt} added to your MoveBuddy wallet.`);
+          onRefreshWallet();
+        } else {
+          setErr(vData.error || 'Failed to update wallet.');
+        }
+        setProcessing(false);
+        return;
+      }
+
+      // Load Razorpay SDK if not present
+      if (!(window as any).Razorpay) {
+        await new Promise((resolve) => {
+          const s = document.createElement('script');
+          s.src = 'https://checkout.razorpay.com/v1/checkout.js';
+          s.onload = () => resolve(true);
+          s.onerror = () => resolve(false);
+          document.body.appendChild(s);
+        });
+      }
+
+      const options = {
+        key: order.keyId,
+        amount: Math.round(amt * 100),
+        currency: order.currency || 'INR',
+        name: 'MoveBuddy Wallet Topup',
+        description: `Add ₹${amt} credits`,
+        order_id: order.orderId,
+        prefill: {
+          name: order.userName || '',
+          email: order.userEmail || '',
+          contact: order.userPhone || '',
+        },
+        theme: { color: '#F59E0B' },
+        handler: async function (response: any) {
+          const vRes = await fetch('/api/wallet/topup-verify', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              orderId: response.razorpay_order_id,
+              paymentId: response.razorpay_payment_id,
+              signature: response.razorpay_signature,
+            }),
+          });
+          const vData = await vRes.json().catch(() => ({}));
+          if (vRes.ok && vData.success) {
+            setMsg(`Success! ₹${amt} added to your MoveBuddy wallet.`);
+            onRefreshWallet();
+          } else {
+            setErr(vData.error || 'Razorpay payment verification failed.');
+          }
+          setProcessing(false);
+        },
+        modal: {
+          ondismiss: function () {
+            setErr('Top-up checkout cancelled.');
+            setProcessing(false);
+          },
+        },
+      };
+
+      const rzp = new (window as any).Razorpay(options);
+      rzp.open();
     } catch (e: any) {
-      setErr('Could not add funds.');
-    } finally {
+      setErr(e?.message || 'Could not add funds.');
       setProcessing(false);
     }
   };
 
-
   const handleRazorpaySuccess = async () => {
-    setProcessing(true);
     setIsRazorpaySimOpen(false);
-
-    try {
-      const coRes = await fetch('/api/wallet/topup-order', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ amount: Number(addAmount) }),
-      });
-      const order = await coRes.json();
-      const res = await fetch('/api/wallet/topup-verify', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          orderId: order.orderId,
-          paymentId: 'pay_dev_' + Date.now(),
-          signature: 'dev',
-        }),
-      });
-      const data = await res.json();
-      if (data.success) {
-        setMsg(`Success! ₹${addAmount} successfully added to your Move Buddy wallet.`);
-        onRefreshWallet();
-      } else {
-        setErr('Transaction failed. Contact support.');
-      }
-    } catch {
-      setErr('Connection error, money not charged.');
-    } finally {
-      setProcessing(false);
-    }
+    triggerAddFunds();
   };
 
   const handleRedeemVoucher = async () => {
