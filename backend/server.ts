@@ -43,9 +43,9 @@ import {
 } from "./trips";
 import { initRealtime, emitTripUpdate } from "./realtime";
 import { verifyOtp, devOtpActive } from "./otp";
-import { initDb, loadState, saveState, persistNow, wipeAllData, persistTrip, persistWalletForUser, persistSubscription, persistMatch, persistUser } from "./db";
+import { initDb, loadState, saveState, persistNow, wipeAllData, persistTrip, persistWalletForUser, persistSubscription, persistMatch, persistUser, dbConnectionError } from "./db";
 import { encryptPii, decryptPii } from "./crypto";
-import prisma from "./prisma";
+import prisma, { isFallbackMode } from "./prisma";
 import { getDistanceKm, geocode, haversineMeters, calculateHaversineDistance } from "./maps";
 import { tryMatchGuestSub, runMatchSweep } from "./matching";
 import { createPendingSubscription, processActivation, activateSubscriptionAsync } from "./activation";
@@ -3318,7 +3318,13 @@ app.get("/health", (_req, res) => {
   res.json({ status: "ok", uptime: process.uptime(), timestamp: new Date().toISOString() });
 });
 app.get("/ready", (_req, res) => {
-  res.json({ status: serverReady ? "ready" : "initializing", db: db ? "connected" : "disconnected" });
+  res.json({
+    status: serverReady ? "ready" : "initializing",
+    db: db ? "connected" : "disconnected",
+    fallbackMode: isFallbackMode(),
+    dbConnectionError: dbConnectionError,
+    hasDatabaseUrl: !!process.env.DATABASE_URL
+  });
 });
 app.get("/live", (_req, res) => {
   res.json({ status: "alive" });

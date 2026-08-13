@@ -9,14 +9,18 @@ export function dbEnabled(): boolean {
   return true;
 }
 
+export let dbConnectionError: string | null = null;
+
 export async function initDb(): Promise<void> {
   try {
     if (!process.env.DATABASE_URL) {
       throw new Error("DATABASE_URL environment variable is not set");
     }
     await prisma.$connect();
+    dbConnectionError = null;
     logger.info("[db] Connected to PostgreSQL via Prisma.");
-  } catch (e) {
+  } catch (e: any) {
+    dbConnectionError = e?.message || String(e);
     logger.warn({ err: e }, "[db] Prisma DB connection failed. Activating local file-based database fallback.");
     setFallbackMode(true);
   }
