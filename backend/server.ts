@@ -45,7 +45,7 @@ import { initRealtime, emitTripUpdate } from "./realtime";
 import { verifyOtp, devOtpActive } from "./otp";
 import { initDb, loadState, saveState, persistNow, wipeAllData, persistTrip, persistWalletForUser, persistSubscription, persistMatch, persistUser, dbConnectionError } from "./db";
 import { encryptPii, decryptPii } from "./crypto";
-import prisma, { isFallbackMode } from "./prisma";
+import prisma, { isFallbackMode, prismaRuntimeError } from "./prisma";
 import { getDistanceKm, geocode, haversineMeters, calculateHaversineDistance } from "./maps";
 import { tryMatchGuestSub, runMatchSweep } from "./matching";
 import { createPendingSubscription, processActivation, activateSubscriptionAsync } from "./activation";
@@ -3323,6 +3323,7 @@ app.get("/ready", (_req, res) => {
     db: db ? "connected" : "disconnected",
     fallbackMode: isFallbackMode(),
     dbConnectionError: dbConnectionError,
+    prismaRuntimeError: prismaRuntimeError,
     hasDatabaseUrl: !!process.env.DATABASE_URL
   });
 });

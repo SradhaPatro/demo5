@@ -431,6 +431,8 @@ const mockPrismaInstance = new Proxy({}, {
   }
 });
 
+export let prismaRuntimeError: string | null = null;
+
 export const prisma = new Proxy({}, {
   get(target: any, prop: string | symbol) {
     if (realPrismaClient && !fallbackModeActive) {
@@ -442,6 +444,7 @@ export const prisma = new Proxy({}, {
             if (res instanceof Promise) {
               return res.catch((e) => {
                 console.warn(`[AI Studio] Real Prisma failed on ${String(prop)}, falling back:`, e);
+                prismaRuntimeError = e?.message || String(e);
                 fallbackModeActive = true;
                 const mockModel = (mockPrismaInstance as any)[prop];
                 if (typeof mockModel === 'function') {
@@ -458,6 +461,7 @@ export const prisma = new Proxy({}, {
             return res;
           } catch (e) {
             console.warn(`[AI Studio] Real Prisma sync failure on ${String(prop)}, falling back:`, e);
+            prismaRuntimeError = e?.message || String(e);
             fallbackModeActive = true;
             return (mockPrismaInstance as any)[prop];
           }
@@ -473,6 +477,7 @@ export const prisma = new Proxy({}, {
               return function(this: any, ...args: any[]) {
                 return modelVal.apply(modelTarget, args).catch((e: any) => {
                   console.warn(`[AI Studio] Real Prisma model call failed on ${String(prop)}.${String(modelProp)}, falling back:`, e);
+                  prismaRuntimeError = e?.message || String(e);
                   fallbackModeActive = true;
                   const mockModel = (mockPrismaInstance as any)[prop];
                   return mockModel[modelProp].apply(mockModel, args);
