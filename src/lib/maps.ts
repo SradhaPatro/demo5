@@ -80,9 +80,19 @@ export async function geocode(address: string): Promise<{ lat: number; lng: numb
 export async function searchLocations(query: string): Promise<LocationSearchResult[]> {
   if (!query || query.trim().length < 3) return [];
 
-  const apiKey =
-    (typeof process !== "undefined" && (process.env.GOOGLE_MAPS_API_KEY || process.env.VITE_GOOGLE_MAPS_API_KEY)) ||
-    (typeof import.meta !== "undefined" && (import.meta.env?.VITE_GOOGLE_MAPS_API_KEY as string));
+  let apiKey =
+    typeof process !== "undefined"
+      ? (process.env.GOOGLE_MAPS_API_KEY || process.env.VITE_GOOGLE_MAPS_API_KEY)
+      : undefined;
+
+  if (!apiKey) {
+    try {
+      const viteEnv = new Function("return import.meta.env")();
+      apiKey = viteEnv?.VITE_GOOGLE_MAPS_API_KEY;
+    } catch {
+      // Ignore if not in a Vite/ESM environment
+    }
+  }
 
   if (apiKey) {
     try {
