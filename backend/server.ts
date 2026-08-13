@@ -130,8 +130,8 @@ const envOrigins = process.env.CORS_ORIGINS
   ? process.env.CORS_ORIGINS.split(",").map((s) => s.trim())
   : [];
 
-app.use(cors({
-  origin: (origin, callback) => {
+const corsOptions = {
+  origin: (origin: string | undefined, callback: (err: Error | null, allow?: boolean | string) => void) => {
     if (!origin) return callback(null, true);
     const isAllowed =
       envOrigins.includes(origin) ||
@@ -144,17 +144,18 @@ app.use(cors({
       process.env.NODE_ENV !== "production";
 
     if (isAllowed) {
-      return callback(null, origin);
+      return callback(null, true);
     }
     // Reflect origin to prevent CORS preflight block in production
-    return callback(null, origin);
+    return callback(null, true);
   },
   credentials: true,
   methods: ["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
   allowedHeaders: ["Content-Type", "Authorization", "X-Requested-With", "Accept"],
-}));
+};
 
-app.options("*", cors() as any);
+app.use(cors(corsOptions));
+app.options("*", cors(corsOptions) as any);
 app.use(requestLogger);
 app.use(express.json({ limit: "25mb" }));
 
